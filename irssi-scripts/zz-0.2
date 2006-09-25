@@ -1,0 +1,180 @@
+#!/bin/zsh
+#
+# on/busy/dnd/na/away/zz - change irssi online status
+#
+# [2004-08-16, 00.31-03.16] v0.1 - written by Zrajm C Akfohg
+#
+# [2006-09-25, 07:43-10:23] v0.2 - now a little bit more careful when doing
+# pipe writes -- should give better error messages; added help() and version()
+# as functions
+
+VERSION=0.2
+VERSION_DATE="25 September 2006"
+
+
+
+###############################################################################
+##                                                                           ##
+##  Informational Functions                                                  ##
+##                                                                           ##
+###############################################################################
+
+
+# output version info and exit
+version() {
+    cat <<-END-OF­VERSION-TEXT
+		$EXE (zsh script) $VERSION (updated $VERSION_DATE)
+
+		Written by/copyright Zrajm C Akfohg (2004-2006).
+		Distributed under GNU Public License 2.
+	END-OF­VERSION-TEXT
+    exit
+}
+
+
+# output help and exit
+help() {
+    cat <<-"END-OF-HELP-TEXT"
+		Usage: on|busy|dnd|na|away|zz [ OPTION | MESSAGE ]
+		Change Irssi online status.
+
+		  -a, --away    go away only if status begins with `online' or `busy'
+		  -h, --help    display this help and exit
+		  -o, --online  go online only if status begins with `away'
+		  -s, --status  display current status and exit
+		  -V, --version output version information and exit
+
+		If OPTION is given default command function is suppressed, otherwise the
+		different command names switch to the corresponding online status.
+
+		Any MESSAGE specified will be used as away message. If not given the xcuses.pl
+		default value will be used. (Any message passed to `on' is silently ignored.)
+
+		(Required: Irssi, plus plugins `fifo_remote.pl' and `xcuses.pl'.)
+	END-OF-HELP-TEXT
+    exit 0;
+}
+
+
+
+###############################################################################
+##                                                                           ##
+##  Functions                                                                ##
+##                                                                           ##
+###############################################################################
+
+
+# output error message on standard error
+# (exits if given shell exit status as 2nd arg)
+ERRORS=0                                       # reset error counter
+unset QUIET                                    # clear QUIET from environment
+error() {                                      #
+    [[ -n $1 && -z $QUIET ]] &&                # output error message (if any)
+        echo "$EXE: $1" >&2                    #   (unless in QUIET mode)
+    [[ $2 -eq 1 && -z $QUIET ]] &&             #   more info on exit status 1
+        echo "Try \`$EXE --help' for more information." >&2 #'"
+    [[ -n $2 ]] && exit $2                     # exit if given exit status
+    ((ERRORS++))                               # count errors
+}                                              #
+
+
+# write to fifo
+write_to_fifo() {                              # [2004-08-15]
+    if [[ ! -p $REMOTE_FILE ]]; then           #   ERROR: not fifo
+        error "$REMOTE_FILE: File does not exist or is not a fifo"
+        return 5                               #
+    fi                                         #
+
+    # Below 'echo' will hang indefinately if the fifo is not read from the
+    # other end. Hence it's very carefully killed it off after a timeout.
+    echo "$*" > "$REMOTE_FILE" &               #   write command to fifo
+    local SECONDS=0                            #   reset timer
+    while [[ -d /proc/$! ]]; do                #   wait for fifo-write
+        sleep .1                               #     to terminate
+        (( SECONDS > FIFO_TIMEOUT ))&&         #   (but wait no longer
+            break                              #     than FIFO_TIMEOUT)
+    done                                       #
+
+    # Output error message if fifo write failed
+    # (and kill off the hanged "echo" process).
+    if [[ -d /proc/$! ]]; then                 #   ERROR: fifo-write failed
+        if [[ "$(</proc/$!/wchan||echo)" == pipe_wait ]] 2>&-; then
+            # The "if" above uses /proc to check status of above fifo-
+            # printing process. If this process has terminated (i.e.
+            # succeded) the /proc entry is no longer there; resulting
+            # in a "no such file or directory" (returned by `cat' or
+            # `<' command inside the "$(..)"). `2>&-' closes standard
+            # error to suppress this message, and `||echo' is used to
+            # give `==' operator a return value to work with (otherwise
+            # the if clause will always be aborted, and its contents
+            # never run).
+            error "$REMOTE_FILE: fifo not answering ($FIFO_TIMEOUT second timeout)"
+        else                                   #
+            error "$REMOTE_FILE: unknown error when writing to fifo"
+        fi                                     #
+        kill $! 2>/dev/null                    #    kill off hanged 'echo'
+    fi                                         #
+}                                              #
+
+
+
+###############################################################################
+##                                                                           ##
+##  Initialization                                                           ##
+##                                                                           ##
+###############################################################################
+
+
+emulate -RL zsh                                # reset zsh options
+setopt EXTENDED_GLOB                           # extended glob
+EXE="${0##(${(j:|:)~path})/}"                  # remove path from $0
+
+# very simple command line parsing
+[[ -n ${(M)argv:#(-h|--help)}    ]] && help    # -h, --help
+[[ -n ${(M)argv:#(-V|--version)} ]] && version # -V, --version
+
+# TODO: Fetch REMOTE_FILE and STATUS_FILE info from ~/.irssi/config using the
+# below values as defaults, if they're not found there.
+
+REMOTE_FILE=~/.irssi/remote-control  # fifo_remote_file (fifo_remote.pl)
+#REMOTE_FILE=~/hej                    # DEBUG THINGY -- REMOVE
+FIFO_TIMEOUT=5                       # timeout when writing to fifo
+STATUS_FILE=~/.irssi/online-status   # xcuses_online_status_file (xcuses.pl)
+COMMAND="`basename $0`"              # name of invoked command
+MESSAGE="$*"                         # command line message
+
+
+# read Irssi online status
+STATUS="$(<$STATUS_FILE||echo -n)" 2>&-        # read irssi online status
+    # STATUS would not be assigned a value if $STATUS_FILE did not exist if it
+    # wasn't for the `||echo -n' part. `2>&-' suppresses any "no such file or
+    # directory" message by closing standard error. /zrajm [2006-09-25]
+
+# act on option
+if [[ -n ${(M)argv:#(-s|--status)} ]]; then    # -s, --status
+    echo "$STATUS" | fold -s -w${COLUMNS:-80}  #   display status
+    exit 0                                     #   exit
+fi                                             #
+if [[ -n ${(M)argv:#(-a|--away)} ]]; then      # -a, --away
+    [[ $STATUS != (#i)(online|busy)* ]] &&     #   ERROR: not online or busy
+        error "Neither \`online' nor \`busy' cannot go away." 5
+    write_to_fifo away                         #   go away
+    exit 0                                     #     exit
+fi                                             #
+if [[ -n ${(M)argv:#(-o|--online)} ]]; then    # -o, --online
+    [[ $STATUS != (#i)away* ]] &&              #   ERROR: not away
+        error "Not \`away' cannot go online." 5 #'"
+    write_to_fifo on                           #   go online
+    exit 0                                     #     exit
+fi                                             #
+[[ $argv[1] == -* ]] &&                        # ERROR: unknown option
+    error "Unknown option \`$argv[1]'." 1 #'"
+
+# normal use
+if [[ -z $MESSAGE ]]; then                     #
+    write_to_fifo "$COMMAND"                   #
+else                                           #
+    write_to_fifo "$COMMAND" "$MESSAGE"        #
+fi                                             #
+
+#[[eof]]
