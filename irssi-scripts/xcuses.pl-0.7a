@@ -1,0 +1,305 @@
+#!/usr/bin/perl -w
+#
+# [2004-08-09, 03.34-09.58] written by Zrajm C Akfohg
+#
+# [2004-08-11, 01.41-03.07] '/away' may now be used without causing infinite
+# loop
+#
+# [2004-08-15, 16.15-16.24] now signal_stop()s when if one tries to set away
+# status to the same as it already is
+#
+# [2004-08-15, 22.53-00.21] v0.4a - now writes the away message into a
+# configurable file (useful for external online/offline scripts e.g. I use one
+# activated by xautolock when my screen blanks)
+#
+# [2004-08-16, 03.18-03.37] v0.5a - now displays changes in online status using
+# ratpoison
+#
+# [2006-08-15, 18:01-18.15] v0.6a - converted script to UTF8
+#
+# [2006-09-24, 05:07-05:11] v0.7a - copied newer show_text() from ratified.pl
+# -- now uses "system" with list argument to avoid shell interpolation
+# (backticks didn't work as expected); also translates incoming utf8 chars (if
+# they're in the latin-1 range) to latin-1 -- this is a cheap workaround since
+# I can't be bothered to configure ratpoison for utf8 (yet; its support for
+# utf8 is so far pretty weak, according to someone on #ratpoison)
+
+# TODO:
+#
+#   o add help to commands (available with e.g. "/help zz")
+#   o add status command
+#   o add sound on/off command(?)
+#   o server flood protection (timeout -- then re-apply for that away status?)
+#   o if the SOUND_OFF_FILE dissapears -- it should become quiet immediately
+#
+# FIXME:
+#
+#   o typing /away when status is already "away" results in "on" status, rather
+#     than the desired "away" status -- a collision between xcuses "/away"
+#     command and irssi's built-in "/away", perchance? How to override the
+#     built-in?
+
+our $COLUMNS = 91;      # ratpoison message bar with
+our $VERSION = "0.7a";
+our %IRSSI = (
+    authors     => "Zrajm C Akfohg",
+    contact     => "zrajm\@klingonska.org",
+    name        => "xcuses",
+    description => "Let's you define a number of away ".
+                   "messages and choose quickly between them.",
+    license     => "GPLv2",
+    url         => "http://www.irssi.org/scripts/",
+);                                             #
+use strict;                                    #
+use Irssi qw/command/;                         #
+our ( $STATUS_FILE,         # file containing online status (online/dnd etc.)
+      $SOUND_OFF_FILE );    # this file exists only when no beeping occur
+
+# simple subs
+sub TRUE()  { 1  }                             # some constants [perlsyn(1)
+sub FALSE() { "" }                             # "Constant Functions"]
+sub DEBUG(@) { print "%B", join(":", @_),"%n" }# DEBUG thingy
+
+# settings
+Irssi::settings_add_str($IRSSI{name}, 'xcuses_sound_off_file',     '~/.no_beep');
+Irssi::settings_add_str($IRSSI{name}, 'xcuses_online_status_file', 'online-status');
+our %config = (
+    on   => { quiet  => FALSE, state => 'Online',
+    },
+    busy => { quiet  => TRUE,  state => 'BUSY',
+              msg    => 'Sitter vid datorn, men låter mig inte bli störd.',
+              append => 'Ring 018-500911 om du vill ha tag i mig.',
+    },
+    dnd  => { quiet  => TRUE,  state => 'DND',
+              msg    => 'I närheten, men låter mig inte bli störd.',
+              append => 'Ring 018-500911 om du vill ha tag i mig.',
+    },
+    na   => { quiet  => FALSE, state => 'N/A',
+              msg    => 'Inte hemma.',
+              append => 'Ring 076-2115043 om du vill ha tag i mig.',
+    },
+    away => { quiet  => FALSE, state => 'AWAY',
+              msg    => 'Förmodligen i närheten, men inte framför datorn.',
+              append => 'Ring 018-500911, eller 076-2115043 för att få tag i mig.',
+    },
+    zz   => { quiet  => TRUE,  state => 'DND',
+              msg    => 'Sover.',
+              append => 'Ring 018-500911 för att väcka, 076-2115043 för '.
+                        'att nå fram endast om jag mot förmodan är vaken.',
+    },
+);
+
+Irssi::command_bind (on   => sub { change_online_status(on   => @_) }, 'Excuses');
+Irssi::command_bind (busy => sub { change_online_status(busy => @_) }, 'Excuses');
+Irssi::command_bind (dnd  => sub { change_online_status(dnd  => @_) }, 'Excuses');
+Irssi::command_bind (na   => sub { change_online_status(na   => @_) }, 'Excuses');
+Irssi::command_bind (away => sub { change_online_status(away => @_) }, 'Excuses');
+Irssi::command_bind (zz   => sub { change_online_status(zz   => @_) }, 'Excuses');
+
+
+# word wrap text
+sub word_wrap($$;$) {                          # [2004-08-17]
+    my ($text, $width, $hyphen) = @_;          #   get args
+    $hyphen = defined $hyphen ?                #   hypen = one char or
+        substr($hyphen, 0, 1) : "\\";          #     default "\"
+    my @word = split /(?<=\s)(?=\S)/, $text;   #   split text into words
+    $text = "";                                #
+    my $len = 0;                               #   last line's length
+    foreach (@word) {                          #   for each word
+        my $wordlen = /\s$/ ?                  #     length of word to add
+            length()-1 : length;               #
+        if ($len + $wordlen <= $width) {       #     word fits
+            $text .= $_;                       #       add to end-of-line
+            $len  += length;                   #
+        } else {                               #     word doesn't fit
+            if ($wordlen <= $width) {          #       word shorter than width
+                $text  =~ s/\s$/\n/;           #         add it to next line
+                $text .= $_;                   #
+                $len   = length;               #
+            } else {                           #       word longer than width
+                while ($wordlen > $width) {    #         break it into parts
+                    $text .= substr($_, 0,     #           placed on separate
+                        $width - $len - 1,     #           lines
+                        '') . "\\\n";          #
+                    $wordlen = /\s$/ ?         #
+                        length()-1 : length;   #
+                    $len = 0;                  #
+                }                              #
+                $text .= $_;                   #
+                $len   = length;               #
+            }                                  #
+        }                                      #
+    }                                          #
+    $text  =~ s/\s$// if $len > $width;        #
+    return $text;                              #   return word wrapped text
+}                                              #
+
+
+# display text in ratpoison
+sub show_text($) {                             # [2004-08-11] -- [2006-09-22]
+    my ($out) = @_;                            #   get args
+    return '' unless defined $ENV{DISPLAY};    #   if not running in X; abort
+    {                                          #   translate string from utf8
+        my $lat = $out;                        #     to latin1 (since ratpoison
+        $lat =~ s/([\xC2\xC3])([\x80-\xFF])/   #     does not yet support utf8)
+            if ($1 eq "\xC2") {                #
+                $2;                            #
+            } elsif ($1 eq "\xC3") {           #
+                chr(ord($2)+64);               #
+            }                                  #
+        /gex;                                  #
+        $lat = word_wrap($lat, $COLUMNS);      #      word wrap text
+        system 'ratpoison', '-c', "echo $lat"; #      call ratpoison "echo"
+    }                                          #
+}                                              #
+
+
+# add path to filename (expands `~user', and make
+# non-absolute filename relative to Irssi's config dir)
+sub absolute_path($) {                         # [2004-08-14] -- [2004-08-15]
+    my ($file) = @_;                           #
+    return '' if $file eq '';                  #   don't modify empty value
+    $file =~ s{^(~[^/]*)}{                     #   expand any leading tilde
+        my $x;                                 #     WORKAROUND: glob()
+        until($x = glob($1)) { };              #       sometimes return empty
+        $x;                                    #       string -- avoid that
+    }ex;                                       #
+    $file = Irssi::get_irssi_dir() . "/$file"  #     if full path is not given
+        unless $file =~ m{^/};                 #       prepend irssi config path
+        # FIXME: clean up multiple slashes, and occuring `/./' and `/../'.
+        # this sub used in: fifo_remote.pl, xcuses.pl
+    return $file;                              #
+}                                              #
+
+
+# turn sound off if argument is true, on otherwise
+sub toggle_sound($) {                          # [2004-08-15]
+    my ($quiet) = @_;                          #   get args
+    if ($quiet) {                              #   enable silent mode
+        open F, ">$SOUND_OFF_FILE" and close F #     create sound off file
+            unless -f $SOUND_OFF_FILE;         #       unless it exists
+        command "set -clear beep_msg_level";   #
+    } else {                                   #   be noisy
+        unlink $SOUND_OFF_FILE                 #     erase sound off file
+            if -f $SOUND_OFF_FILE;             #       if it exists
+        command "set beep_msg_level MSGS HILIGHT";
+    }                                          #
+}                                              #
+
+
+# write online status to file
+# (for the benefit of scripts etc)
+sub write_online_status(;$) {                  # [2004-08-15]
+    my ($msg) = @_;                            #
+    return FALSE unless $STATUS_FILE;          #   abort if no filename
+    if (not defined $msg) {                    #   no arg?
+        my $server = Irssi::active_server();   #     then get the current
+        $msg = 'Online.';                      #       away message (if
+        $msg = $$server{away_reason}           #       any)
+            if $$server{usermode_away};        #
+    }                                          #
+    open OUT, '>', $STATUS_FILE and do {       #   open file
+        print OUT $msg."\n";                   #     write status to file
+        close OUT;                             #     close file
+    };                                         #
+}                                              #
+
+
+
+our $NESTED = FALSE;                           #
+sub change_online_status($$$$) {               # [2004-08-15]
+    return FALSE if $NESTED;                   #   abort function if called
+    $NESTED = TRUE;                            #     from within itself
+    my ($cmd, $msg, $server, $window) = @_;    #   get args
+    toggle_sound($config{$cmd}{quiet});        #   change sound settings
+
+    # update irssi /away status
+    return FALSE unless $server;               #   abort unless connected
+    if ($config{$cmd}{state} =~ /^online$/i) { #   we shall go online
+        if ($$server{usermode_away}) {         #     we're away
+            $server->command("away");          #       go online
+            $msg = 'Online.';                  #
+        } else {                               #     we ARE online already
+            $msg = "Already online.";          #       ERROR: already online
+            Irssi::signal_stop();              #       (do nothing more)
+        }                                      #
+    } else {                                   #     we shall go away
+        $msg  = $config{$cmd}{msg}             #       use default message
+            if $msg eq '';                     #         unless message given
+        $msg  = join " - ",                    #       add away state to msg
+            $config{$cmd}{state}, $msg;        #
+        $msg .= ' ' . $config{$cmd}{append}    #       add trailing part
+            if $config{$cmd}{append} ne '';    #         if given in config
+        if ($$server{usermode_away} and        #       if already away and with
+            $$server{away_reason} eq $msg){    #         the same message
+            $msg = "Already $msg";             #         ERROR: already away
+            Irssi::signal_stop();              #         (do nothing more)
+        } else {                               #       otherwise
+            $server->command("away $msg");     #         do /away on server
+        }                                      #
+    }                                          #
+    write_online_status($msg)                  #   write online status
+        unless $msg =~ /^Already/i;            #
+    {                                          #   display in ratpoison 
+        my $msg = $msg;                        #     (KLUDGY THINGY)
+        $msg =~ s/\s*\Q$config{$cmd}{append}\E$//; # strip off: appended part
+        #$msg =~ s/^Already\s*//;               #     any leading "Already"
+        show_text($msg);                       #     display in ratpoison
+    }                                          #
+
+    $msg =~ s/(Already \S*)/%9$1%9/;           #   highlight "Already"
+    Irssi::active_win->print($msg,             #   display message on screen
+        MSGLEVEL_CLIENTNOTICE);                #
+    $NESTED = FALSE;                           #
+    return TRUE;                               #
+}                                              #
+
+
+# clean up fifo on unload
+# (called on /script unload)
+Irssi::signal_add_first                        #
+    'command script unload', sub {             # [2004-08-13]
+        my ($script) = @_;                     #   get args
+        return unless $script =~               #   only do cleanup when
+            /(?:^|\s) $IRSSI{name}             #     unloading *this* script
+             (?:\.[^. ]*)? (?:\s|$) /x;        #
+        unlink $STATUS_FILE                    #   remove status file
+            if -f $STATUS_FILE;                #     if it exists
+        unlink $SOUND_OFF_FILE                 #   remove sound-off-file
+            if -f $SOUND_OFF_FILE;             #     if it exists
+        Irssi::print("%B>>%n $IRSSI{name} $VERSION unloaded", MSGLEVEL_CLIENTCRAP);
+    };                                         #
+
+
+# read/change setup
+# (called on script loading and on user /set)
+sub setup() {
+    my $status_file = absolute_path            #   get xcuses_sound_off_file
+        Irssi::settings_get_str                #     setting from Irssi
+        'xcuses_online_status_file';           #     (and add path to it)
+    my $sound_off_file = absolute_path         #   get xcuses_sound_off_file
+        Irssi::settings_get_str                #     setting from Irssi
+        'xcuses_sound_off_file';               #     (and add path to it)
+    if ($STATUS_FILE ne $status_file) {        #   change STATUS_FILE
+        if (-f $STATUS_FILE) {                 #     if old file exists
+            rename $STATUS_FILE,               #       move it to new
+                $status_file;                  #         locatation
+        }                                      #
+        $STATUS_FILE = $status_file;           #     new STATUS_FILE value
+        write_online_status()                  #   write online status
+            unless -f $STATUS_FILE;            #     if file doesn't exist
+    }                                          #
+    if ($SOUND_OFF_FILE ne $sound_off_file) {  #   change SOUND_OFF_FILE
+        if (-f $SOUND_OFF_FILE) {              #     if old file exists
+            rename $SOUND_OFF_FILE,            #       move it to new
+                $sound_off_file;               #         locatation
+        }                                      #
+        $SOUND_OFF_FILE = $sound_off_file;     #     new SOUND_OFF_FILE value
+    }                                          #
+}                                              #
+
+setup();                                       # initialize setup values
+Irssi::signal_add('setup changed', \&setup);   # re-read setup when it changes
+print CLIENTCRAP "%B>>%n $IRSSI{name} $VERSION (by $IRSSI{authors}) loaded";
+
+# [[eof]]
