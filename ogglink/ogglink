@@ -1,0 +1,654 @@
+#!/usr/bin/perl -w
+#
+# ogglink - make symlinks to music dirs w/ names based on soundfile tags
+#
+# [2005-02-25, 11.29-12.19] initial attempt in zsh (by Zrajm C Akfohg)
+#
+# [2005-02-25, 17.58-23.09] rewrote in perl (after realizing that writing
+# UTF-to-latin1, and latin1-to-filename conversion in zsh would mean *hell*)
+#
+# [2005-02-26, 08.14-11.58] added handling of two digit date fields, a standard
+# approach to required tags
+#
+# [2005-02-26, 13.58-18.02] added actual linking, and parsing of command line
+# options
+#
+# [2005-02-28, 14.42-15.58] now accepts relative paths as arguments
+#
+# [2005-02-28, 18.25-20.50] progress meter as default use `-q' to silence it,
+# implemented reading list of album directories on STDIN
+#
+# [2005-03-04, 02.22-02.29] reading of mp3 tags added
+#
+# [2005-03-06, 00.11-01.19] reading of mp3 tags finished, will now also refuse
+# gracefully when trying to make a link pointing to itself
+#
+# [2006-03-07, 07.54-07.58] v0.5 - now updates modification time of the
+# destination directory (useful, since I have a makefile which generates a list
+# my music so that I can carry it around in Palm Vx)
+#
+# [2006-03-22, 22.53-00.27] v0.6 - implemented simplistic tag override file
+# (desperately needed it)
+#
+# [2006-12-27, 09:53-10:05] v0.7 - fixed(?) stupid shell metacharacter bug
+# which caused files whose names contained backtick (`) or double quote (") to
+# fail
+#
+# [2006-12-27, 12:08-12:17] v0.7.1 - verified the shell metacharacter routine
+# by reading up on double quoted stings in bash and ash; now also escapes
+# backslash (\)
+#
+# [2007-01-16, 08:42-10:28] v0.8 - now uses "taginfo" (instead of "oggtst" or
+# "mp3info" which depended on file extension -- also "mp3info" couln't read
+# newer kinds of mp3 tags) to read tags from sound file; now also looks at both
+# DATE and YEAR tag in order to find the year info
+#
+# [2007-01-17, 17:50-17:59] v0.8.1 - BUGFIX: ooops! seemed to fuckup the shell
+# escaping in last revision - fixed that.
+
+# TODO:
+#
+#   o option to rename the directory the files are in based on the tags of the
+#     songs contained therein, without creating any kind of link
+#
+#   o if any of the used binaries (taginfo) does not exist, explain the problem
+#     to the user, and fail in a controlled way, instead of the current "sh:
+#     taginfo: command not found"
+#
+#   o recursive scanning of source directories
+#
+#   o remove specified leading words from ARTIST and ALBUM fields
+#     (i.e. 'the', 'a' etc.)
+#
+#   o make backups of present links if they are overwritten
+#
+#   o 'check' or 'pretend' mode look if all -- report if all links are in place
+#     that would have been written under a normal run, and whether they point
+#     to the same place or not
+#
+#   o create dirs with symlinks to each file instead (?)
+#
+#   o avoid issue of two albums being given the same directory name (as with my
+#     two versions Kraftwerk's "The Mix" and "The Mix (Deutche Version)") --
+#     maybe a warning should be issued if a link is replaced by another is the
+#     same run? /zrajm [2006-03-22]
+#
+#   o partial tag override? -- i.e. if some, but not all tags are found in the
+#     override file read meta data from sound files as well. /zrajm [2006-03-22]
+#
+#   o make links absolute if they "back down" all the way to `/'? option to
+#     make links absolute? /zrajm [2006-03-22]
+#
+#   o length of progress status line should not be longer than terminal width
+#     (value must be checked and updated if user resize window!) -- or maybe
+#     there's some teminal setting/escape sequence which avoids the residual
+#     lines that appear when the status line length exceed the width of the
+#     terminal?  /zrajm [2006-03-22]
+#
+#   o cache? -- use some feature similar to the feature for caching directories
+#     and minimize usage of external meta data-reading programs? /zrajm
+#     [2006-03-22]
+
+
+use strict;
+sub TRUE  { 1; }
+sub FALSE { 0; }
+
+
+
+###############################################################################
+##                                                                           ##
+##  Settings                                                                 ##
+##                                                                           ##
+###############################################################################
+
+
+# listed below are tags which are always set
+# (if missing or empty in file, below values are used)
+my %required_tag = (
+    artist => '*UNKNOWN*',
+    title  => '*UNTITLED*',
+    date   => '0000',
+);
+
+
+# default options
+my %Opt = (
+    force       => FALSE,
+    help        => FALSE,
+    quiet       => FALSE,
+    recursive   => FALSE,
+    verbose     => FALSE,
+);
+
+# short option names
+my %Short_Opt = (
+    f => 'force',
+    h => 'help',
+    q => 'quiet',
+    r => 'recursive',
+    v => 'verbose',
+);
+
+# list of file name extensions to look for
+my @ext = qw/ogg mp3/;
+
+
+my $override_file = ".tag-override.txt";
+    # If this file exists in an album dir, it will be *instead of* the music
+    # files in question. This is intended for overriding tags in files which
+    # you do not wish to alter.
+    #
+    # Right now parsing is very simplistic. File is expected to contain only
+    # the following (in any order). For an album with more than one artist, use
+    # `[[ARTIST=Various]]'. (Tag names are non-casesensetive, i.e. `ARTIST'
+    # equals `ARTist' or just plain `artist'.)
+    #
+    #   [[ARTIST=Finntroll]]
+    #   [[ALBUM=Jaktens Tid]]
+    #   [[DATE=2001]]
+    #
+    # Use `[[ARTIST=]]' for compilations (i.e. albums with more than one artist).
+
+
+###############################################################################
+##                                                                           ##
+##  Initialization                                                           ##
+##                                                                           ##
+###############################################################################
+
+
+use Cwd;                                       # for current working dir
+my $ext = '('.join('|', @ext).')';             # regex matching know file exts
+
+# latin1 -> 7 bit ascii conversion table (for filenames)
+# (from my `oggtag' program)
+my %char_conv=(
+    "\x00" => "",    "\x01" => "",    "\x02" => "",    "\x03" => "",
+    "\x04" => "",    "\x05" => "",    "\x06" => "",    "\x07" => "",
+    "\x08" => "",    "\x09" => "",    "\x0a" => "",    "\x0b" => "",
+    "\x0c" => "",    "\x0d" => "",    "\x0e" => "",    "\x0f" => "",
+    "\x10" => "",    "\x11" => "",    "\x12" => "",    "\x13" => "",
+    "\x14" => "",    "\x15" => "",    "\x16" => "",    "\x17" => "",
+    "\x18" => "",    "\x19" => "",    "\x1a" => "",    "\x1b" => "",
+    "\x1c" => "",    "\x1d" => "",    "\x1e" => "",    "\x1f" => "",
+    " "    => "_",   "!"    => "_",   "\""   => "_",   "#"    => "",
+    "\$"   => "",    "%"    => "",    "&"    => "_",   "'"    => "",
+    "("    => "_",   ")"    => "_",   "*"    => "",    "+"    => "_",
+    ","    => "_",   "-"    => "_",   "."    => "",    "/"    => "_",
+    "0"    => "0",   "1"    => "1",   "2"    => "2",   "3"    => "3",
+    "4"    => "4",   "5"    => "5",   "6"    => "6",   "7"    => "7",
+    "8"    => "8",   "9"    => "9",   ":"    => "_",   ";"    => "_",
+    "<"    => "_",   "="    => "_",   ">"    => "_",   "?"    => "_",
+    "@"    => "",    "A"    => "A",   "B"    => "B",   "C"    => "C",
+    "D"    => "D",   "E"    => "E",   "F"    => "F",   "G"    => "G",
+    "H"    => "H",   "I"    => "I",   "J"    => "J",   "K"    => "K",
+    "L"    => "L",   "M"    => "M",   "N"    => "N",   "O"    => "O",
+    "P"    => "P",   "Q"    => "Q",   "R"    => "R",   "S"    => "S",
+    "T"    => "T",   "U"    => "U",   "V"    => "V",   "W"    => "W",
+    "X"    => "X",   "Y"    => "Y",   "Z"    => "Z",   "["    => "_",
+    "\\"   => "_",   "]"    => "_",   "^"    => "",    "_"    => "_",
+    "`"    => "_",   "a"    => "a",   "b"    => "b",   "c"    => "c",
+    "d"    => "d",   "e"    => "e",   "f"    => "f",   "g"    => "g",
+    "h"    => "h",   "i"    => "i",   "j"    => "j",   "k"    => "k",
+    "l"    => "l",   "m"    => "m",   "n"    => "n",   "o"    => "o",
+    "p"    => "p",   "q"    => "q",   "r"    => "r",   "s"    => "s",
+    "t"    => "t",   "u"    => "u",   "v"    => "v",   "w"    => "w",
+    "x"    => "x",   "y"    => "y",   "z"    => "z",   "{"    => "_",
+    "|"    => "_",   "}"    => "_",   "~"    => "",    "\x7f" => "",
+    "\x80" => "",    "\x81" => "",    "\x82" => "",    "\x83" => "",
+    "\x84" => "",    "\x85" => "",    "\x86" => "",    "\x87" => "",
+    "\x88" => "",    "\x89" => "",    "\x8a" => "",    "\x8b" => "",
+    "\x8c" => "",    "\x8d" => "",    "\x8e" => "",    "\x8f" => "",
+    "\x90" => "",    "\x91" => "",    "\x92" => "",    "\x93" => "",
+    "\x94" => "",    "\x95" => "",    "\x96" => "",    "\x97" => "",
+    "\x98" => "",    "\x99" => "",    "\x9a" => "",    "\x9b" => "",
+    "\x9c" => "",    "\x9d" => "",    "\x9e" => "",    "\x9f" => "",
+    "\xa0" => "_",   "¡"    => "_",   "¢"    => "",    "£"    => "",
+    "¤"    => "",    "¥"    => "",    "¦"    => "_",   "§"    => "_",
+    "¨"    => "",    "©"    => "",    "ª"    => "",    "«"    => "_",
+    "¬"    => "_",   "­"    => "_",   "®"    => "",    "¯"    => "_",
+    "°"    => "",    "±"    => "_",   "²"    => "2",   "³"    => "3",
+    "´"    => "",    "µ"    => "",    "¶"    => "",    "·"    => "_",
+    "¸"    => "",    "¹"    => "1",   "º"    => "",    "»"    => "_",
+    "¼"    => "_",   "½"    => "_",   "¾"    => "_",   "¿"    => "_",
+    "À"    => "A",   "Á"    => "A",   "Â"    => "A",   "Ã"    => "A",
+    "Ä"    => "A",   "Å"    => "A",   "Æ"    => "Ae",  "Ç"    => "C",
+    "È"    => "E",   "É"    => "E",   "Ê"    => "E",   "Ë"    => "E",
+    "Ì"    => "I",   "Í"    => "I",   "Î"    => "I",   "Ï"    => "I",
+    "Ð"    => "D",   "Ñ"    => "N",   "Ò"    => "O",   "Ó"    => "O",
+    "Ô"    => "O",   "Õ"    => "O",   "Ö"    => "O",   "×"    => "_",
+    "Ø"    => "O",   "Ù"    => "U",   "Ú"    => "U",   "Û"    => "U",
+    "Ü"    => "U",   "Ý"    => "Y",   "Þ"    => "T",   "ß"    => "sz",
+    "à"    => "a",   "á"    => "a",   "â"    => "a",   "ã"    => "a",
+    "ä"    => "a",   "å"    => "a",   "æ"    => "ae",  "ç"    => "c",
+    "è"    => "e",   "é"    => "e",   "ê"    => "e",   "ë"    => "e",
+    "ì"    => "i",   "í"    => "i",   "î"    => "i",   "ï"    => "i",
+    "ð"    => "d",   "ñ"    => "n",   "ò"    => "o",   "ó"    => "o",
+    "ô"    => "o",   "õ"    => "o",   "ö"    => "o",   "÷"    => "_",
+    "ø"    => "o",   "ù"    => "u",   "ú"    => "u",   "û"    => "u",
+    "ü"    => "u",   "ý"    => "y",   "þ"    => "t",   "ÿ"    => "y"
+);
+
+
+
+###############################################################################
+##                                                                           ##
+##  Functions                                                                ##
+##                                                                           ##
+###############################################################################
+
+
+# get name of executed file (stip off $PATH)
+my $EXE;
+{                                              #
+    my $path;                                  #
+    ($path = $ENV{PATH}) =~ tr¶:¶|¶;           # turn path into 1|2 list
+    ($EXE  = $0)         =~ s¶^(?:$path)/¶¶;   # program file name
+}                                              #
+
+
+# output error message on standard error
+# (exits if given exit return code as 2nd arg,
+# and displays --help hint if return code = 1)
+my $Errors = 0;                                # init error counter
+sub error(;$$) {                               # on error
+    my ($msg, $num) = @_;                      #   get args
+    $Errors ++;                                #   count errors
+    warn "$EXE: $msg\n"                        #   output error message
+        if defined $msg and $msg;              #
+    return unless defined $num;                #   no retcode = return
+    warn "Try \`$EXE --help\' for more information.\n"
+        if $num == 1;                          #   retcode = 1: output hint
+    exit $num if $num  > 0;                    #   exit with given retcode
+}                                              #
+
+
+# convert utf -> latin-1
+# (from my Irssi 'eventcatcher' program)
+sub utf2latin1($) {                            # [2003-09-29]
+    local $_ = (@_ ? shift : $_);              #   get args or $_
+    return unless defined($_);                 #
+    s/([ÂÃ])(.)/                               #     turn unicode into latin-1
+        if    ($1 eq "Â") { "$2" }             #       special chars ¡¢£¤ etc
+        elsif ($1 eq "Ã") { chr(ord($2)+64) }  #       accented chars åäö etc
+        else              { "$1$2" }           #       don't modify any other
+    /egx;                                      #
+    s/\r\n/\n /g and s/^/\n /;                 #   change CR+LF into plain LF
+    return $_;                                 #
+}                                              #
+
+
+# converts a list of filename parts into a proper filename
+# (without extension, add that later)
+sub filename(@) {
+    my (@part) = @_;                           #
+    foreach (@part) {                          # foreach word
+        s/(.)/$char_conv{$1}/ge;               #   translate
+        tr/_//s;                               #   squeeze duplicate `_'
+        s/^_|_$//g;                            #   del `_' at start/end
+    }                                          #
+    return join "-", @part;                    # return file name
+}                                              #
+
+
+# abbreviate strings
+# (remove parenthesis and extraneous space)
+sub abbr($) {
+    local $_ = shift || $_;                    # get arg or $_
+    s/[(][^)]*[)]//g;                          #   del parentheses w/ contents
+    tr/ //s;                                   #   squeeze duplicate spaces
+    s/^ | $//g;                                #   del space at start/end
+    return $_;                                 #
+}                                              #
+
+
+# Oggtag name format:
+# [http://www.xiph.org/ogg/vorbis/doc/v-comment.html]
+#
+#   o A case-insensitive field name that may consist of ASCII 0x20 through
+#     0x7D, 0x3D ('=') excluded. ASCII 0x41 through 0x5A inclusive (A-Z) is to
+#     be considered equivalent to ASCII 0x61 through 0x7A inclusive (a-z).
+#
+#   o The field name is immediately followed by ASCII 0x3D ('='); this equals
+#     sign is used to terminate the field name.
+#
+#   o 0x3D is followed by 8 bit clean UTF-8 encoded field contents to the end
+#     of the field.
+
+
+# Usage: %TAG = read_tags($FILE);
+#
+# or %TAG = read_tags();
+#
+# Returns hash of tags, or empty hash on failure. If $FILE is not given, uses
+# filename from $_.
+
+sub read_tags(;$) {                            # [2005-03-04] -- [2007-01-16]
+    local $_ =  (@_ ? @_ : $_);                #   get arg/$_ (filename)
+    (my $file = $_) =~ s/([\$`"\\])/\\$1/g;    #   escape shell metachars
+    my @line = `taginfo "$file"`;              #   read tags from file
+        # FIXME fail with appropriate error message if "taginfo" program is not
+        # in path
+    if (not @line) {                           #   ERROR
+        error "no tags found in file `$_'";    #     no tags found
+        return ();                             #
+    }                                          #
+    my %tag  =  ();                            #   tag hash
+    foreach (@line) {                          #   for each tag
+        if (/^([^=]+)=" *(.*?) *"$/) {         #     get name/value pair
+            my $name  = lc         $1;         #       make name lower case
+            my $value = utf2latin1 $2;         #       make value latin-1
+            $value =~ s/[\x00-\x1F]//;         #       strip any control chars
+            $tag{$name} = $value;              #
+        }                                      #
+    }                                          #
+    return %tag;                               #   return tags
+}                                              #
+
+
+# read tags from an audio file
+#
+# FIXME: return value hash should be passed as argument (by referece) and the
+# actual returnvalue should reflect only whether or not function succeded.
+sub read_multiple_tags(@) {                    # []
+    my @file = @_;                             #   list of file(s)
+    my %tag  = ();                             #   read tags
+    foreach (@file) {                          #   for each file
+        my %read_tag = read_tags;              #     read tags
+        local $_;                              #
+        while ((my $tag, $_) = each %read_tag){#     check/correct tag values
+            if ($tag eq 'artist') {            #       ARTIST tag
+                $_ = '*VARIOUS*'               #          use `*VARIOUS*' if
+                    if exists $tag{artist} &&  #            this artist isn't
+                        $tag{artist} ne $_;    #            the same as the
+                next;                          #            previous one
+            }                                  #
+            if ($tag eq 'year') {              #       YEAR tag
+                if (/^\d{4}$/) {               #         four digits
+                    $tag{date} = $_;           #           (e.g. `2005')
+                } elsif (/^\d{2}$/) {          #         two digits
+                    my $now =                  #           (e.g. `05')
+                        (localtime)[5] % 100;  #
+                    $tag{date} = ($_ > $now ?  #           prefix with
+                        '19' : '20') . $_;     #             `19' or `20'
+                }                              #
+            }                                  #
+            if ($tag eq 'date') {              #       DATE tag
+                if (/.*(?<!\d)(\d{4})(?!\d)/){ #         last 4 digit cluster
+                    $_ = $1;                   #           (e.g. `1988-2001')
+                } elsif (/.*(?<!\d)(\d{2})(?!\d)/){#     last 2 digit cluster
+                    my $now =                  #           (e.g. `aug '02')
+                        (localtime)[5] % 100;  #
+                    $_ = ($1 > $now ?          #           prefix with
+                        '19' : '20') . $1;     #             `19' or `20'
+                } else {                       #           no year found
+                   $_ = 0;                     #             (set to zero)
+                }                              #
+                undef $_ if exists $tag{date}  #           only use this year
+                    and $tag{date} > $_;       #             if it's the last
+                next;                          #             year found in the
+            }                                  #             dir/album
+        } continue {                           #
+            $tag{$tag} = $_ if defined $_;     #     set tag according
+        }                                      #       to this song
+    }                                          #
+    $tag{date} = ''                            #   set DATE to empty
+        if exists $tag{date} and !$tag{date};  #     string if zero
+    foreach (keys %required_tag) {             #   set required but unset
+        $tag{$_} = $required_tag{$_}           #     values to default
+            if not exists $tag{$_} or          #
+                $tag{$_} =~ /^\s*$/;           #
+    }                                          #
+    return %tag;                               #   return result
+}                                              #
+
+
+# FIXME: return value hash should be passed as argument (by referece) and the
+# actual returnvalue should reflect only whether or not function succeded.
+sub read_override_file_tags($) {               # [2006-03-22]
+    local $_;                                  #   localize $_
+    my ($file) = @_;                           #   file to read
+    my  %tag   = ();                           #   read tags
+    open TOC, '<', $file or do {               #  open tocfile
+        warn "$EXE: Can't open tag override file `$file': $!\n"; 
+        return ();                             #  ERROR: can't open tocfile
+    };                                         #
+    local $/ = "\n";                           #   don't use slurp mode
+    while (<TOC>) {                            #   for each read line
+        s/^\s*(.*?)\s*$/$1/;                   #     strip start/end space
+      TAG: foreach (split /\s*(?=\[\[)/, $_) { #     split into tags
+            /^ \Q[[\E ([\x21-\x3C\x3E-\x7D]*) = (.*) \Q]]\E $/x or do {
+                warn "$EXE: Syntax error in tag override file `$file' line $..\n" .
+                    "    (did not expect `$_')\n";
+                next;                          #
+            };                                 #
+            my ($tag, $value) = (lc $1, $2);   #
+            $value = '*VARIOUS*'               #
+                if $tag eq 'artist' and $value eq '';
+            $tag{$tag} = $value;               #
+        }                                      #
+    }                                          #
+    close TOC or do {                          #
+        warn "Can't close tag override file `$file': $!\n";#
+        return ();                             #   ERROR: couldn't read oggtags
+    };                                         #
+    return %tag;                               #
+}                                              #
+
+
+
+
+# create a symlink (pointing to a relative path)
+sub make_rel_symlink($$) {                     # [2005-02-26]
+    my ($absolute, $name) = @_;                #   get args
+    if ($absolute eq $name) {                  #   ERROR: source/dest is same
+        error "`$absolute' and `$name' are the same";
+        return FALSE;                          #
+    }                                          #
+    # FIXME: add error checks/make more general
+    #   o if @name exists and is a dir, last part of @absolute
+    #     should me used as the symlink's file name
+    my @name = split '/', $name;               #   symlink name
+    my @relative = split '/', $absolute;       #   symlink contents
+    my $removed = 0;                           #
+    while ($name[$removed] eq $relative[0]) {  #   remove common part of
+        shift @relative;                       #     path from file
+        $removed ++;                           #
+    }                                          #
+    unshift @relative, ('..') x ($#name-$removed); #   add any '..' parts
+    my $relative = join '/', @relative;        #
+    if (-l $name) {                            #   if link already exists
+        my $old_link = readlink $name;         #     read old link
+        return TRUE                            #     keep old link if
+            if $old_link eq $relative;         #       same as the new one
+        error "changing symlink `$name':\n" .  #
+            "  old: `$old_link'\n" .           #
+            "  new: `$relative'";              #
+        unlink $name or do {                   #     otherwise remove it
+           error "cannot remove old symlink `$name': $!";
+           return FALSE;                       #       ERROR: cannot remove
+        };                                     #
+    } elsif (-e $name) {                       #   ERROR: won't overwrite file
+        error "cannot overwrite file or directory `$name' with symlink";
+        return FALSE;                          #
+    }                                          #
+    symlink $relative, $name or do {           #   create symlink
+        error "cannot create symlink `$name': $!";
+        return FALSE;                          #     ERROR: failed
+    };                                         #
+    return TRUE;                               #
+}                                              #
+
+
+# Usage: clean_path([@PATH]) [from my `unfold' program]
+#
+# Resolve /../ and remove /./ and // from all @PATH(s) (if omitted examines
+# $_). In scalar context, returns only first path.
+sub clean_path(@) {                            # [2004-04-24]
+    my @path = (@_ ? @_ : $_);                 #   use args or $_
+    foreach (@path) {                          #   for each given path
+        next unless defined;                   #     do nada if undef
+               s¶/      \.? (?=/|$)¶¶gox;      #     remove /./ & //
+        while (s¶/[^/]*/\.\.(?=/|$)¶¶gox) {}   #     resolve all /../
+    }                                          #
+    return (wantarray ? @path : $path[0]);     #   return result
+}                                              #
+
+
+
+###############################################################################
+##                                                                           ##
+##  Informational Routines                                                   ##
+##                                                                           ##
+###############################################################################
+
+
+sub help() {
+    print <<".";
+Usage: $EXE [ALBUMDIR]... LINKDIR
+Populate LINKDIR with `ARTIST-YEAR-ALBUM' symlink(s), one for each ALBUMDIR.
+
+ (-c, --check)      check validity present symlinks
+ (-d, --delete)     delete links instead of creating
+  -h, --help        display this help and exit
+  -f, --force       override some warnings
+  -q, --quiet       suppress progress meter output
+ (-r, --recursive)  scan ALBUMDIR(s) recursively
+  -v, --verbose     explain what is being done
+
+(...) means not implemented (yet)
+
+Creates a number of symlinks in LINKDIR pointing to each ALBUMDIR. The newly
+created symlinks will be named `ARTIST-YEAR-ALBUM'. The contents of the ARTIST,
+YEAR and ALBUM fields are taken from the metainfo of the audio files in
+respective ALBUMDIR.
+
+If there is a discrepancy in the YEAR info between the files of the same
+ALBUMDIR, then latest of the YEARs found will be used. If the ARTIST info
+differs, it will be set to "VARIOUS".
+
+If an ALBUMDIR is given as `-' it will be replaced with a list of dirs read
+from standard input.
+
+The meta data read may also be overridden by placing a file called
+`$override_file' in the ALBUMDIR in question. This override file should contain
+tags in the format `[[ARTIST=Nirvana]] [[ALBUM=Nevermind]] [[DATE=1991]' (only
+ARTIST, ALBUM and DATE tags are currently considered). Newlines and spaces
+outside the brackets are not considered. `[[ARTIST=]]' makes the album be
+interpreted as an compilation album (with more than one artist).
+
+.
+    exit;
+}
+
+
+
+###############################################################################
+##                                                                           ##
+##  Main Program                                                             ##
+##                                                                           ##
+###############################################################################
+
+
+# parse command line options
+for (my $i = 0; $i <= $#ARGV;) {               #
+    local $_ = $ARGV[$i];                      #
+    /^--$/ and splice(@ARGV, $i, 1), last;     #   `--' = terminate parsing
+    /^-$/ and do {                             #   `-'  = get filelist on STDIN
+        print STDERR "Waiting for list of directories on standard input:\n"
+            if -t STDIN;                       #     WARNING: input is on TTY
+        my @file = <STDIN>;                    #
+        chomp @file;                           #
+        splice(@ARGV, $i, 1, @file);           #
+        $i += $#file;                          #
+    } or                                       #
+    /^--(.*)/ and do {                         #   long options
+        my $name = lc $1;                      #     option name (lower case)
+        if (exists $Opt{$name}) {              #     existing option?
+            $Opt{$name} = !$Opt{$name};        #       then negate its value
+        } else {                               #     otherwise
+            error "unrecognized option `$_'";  #       ERROR: uknown option
+        }                                      #
+        splice(@ARGV, $i, 1);                  #     remove this argument
+    } or                                       #
+    /^-(.)(.*)/ and do {                       #   short options
+        if (exists $Short_Opt{$1}) {           #     existing option?
+            $Opt{$Short_Opt{$1}} =             #       then negate its value
+                !$Opt{$Short_Opt{$1}};         #
+        } else {                               #     otherwise
+            error "invalid option -- $1";      #       ERROR: unkown option
+        }                                      #
+        if ($2 ne '') {                        #     more options bundled?
+            $ARGV[$i] = "-$2";                 #       keep them as argument
+        } else {                               #     otherwise
+            splice(@ARGV, $i, 1);              #       remove this argument
+        }                                      #
+    } or                                       #
+    $i++;                                      #   non-option argument, goto
+}                                              #     next in command line
+help if $Opt{help};                            # show help
+error '', 1 if $Errors;                        # exit on errors
+
+
+# remove non-dirs and make all paths absolute
+for (my $i = 0; $i < @ARGV; $i ++) {           # for each remaining argument
+    $ARGV[$i] =~ s¶/+$¶¶;                      #   strip trailing slash(es)
+    local $_ = $ARGV[$i];                      #   "alias" $_ to current arg
+    if (-d) {                                  #   if argument is a dir
+        $ARGV[$i] = clean_path(cwd."/$_")      #     make sure its absolute
+            unless m¶^/¶;                      #       (not relative)
+        next;                                  #     and goto next argument
+    }                                          #
+    warn "$EXE: Not a directory: $_\n";        #   ERROR: arg not a dir
+    splice @ARGV, $i, 1;                       #   remove arg from list
+    $i < @ARGV ? redo : last;                  #   and continue if there are
+}                                              #     any more args
+
+
+# test remaining args/paths
+error 'missing source '.(@ARGV ? 'or' : 'and').' destination dir(s)', 1
+    if @ARGV < 2;                              #
+my $dest = pop;                                # get destination dir
+error "destination dir `$dest' does not exist", 10 unless -e $dest;
+error "destination `$dest' is not a directory", 10 unless -d $dest;
+error "destination dir `$dest' contains non-symlinks\n" .
+    "  (use `--force' to proceed anyway)", 5   # WARNING: non-symlinks in
+    if !$Opt{force}                            #   destination
+        and grep !-l, glob "\Q$dest\E/*";      #
+
+
+print "destination: $dest\n" if $Opt{verbose}; # VERBOSE output
+my $count = @ARGV;                             # init countdown
+foreach (@ARGV) {                              # for each give album
+    print "\n$_\n" if $Opt{verbose};           #   VERBOSE output
+    my %tag;                                   #
+    if (-e "$_/$override_file") {              #   if override file exists
+        %tag = read_override_file_tags         #     read tags from that
+            "$_/$override_file";               #
+    } else {                                   #   otherwise
+        my @file = grep /.$ext$/ && -f,        #     list of existing files with
+            glob "\Q$_\E/*";                   #       know extensions in dir
+        next unless @file;                     #       skip if no files listed
+        %tag = read_multiple_tags(@file);      #     read file tags
+    }                                          #
+    my $link = lc filename                     #   link name (lower cased)
+        abbr($tag{artist}), $tag{date},        #
+        abbr($tag{album});                     #
+    if ($Opt{verbose}) {                       #   VERBOSE output
+        print                                  #
+            "    ARTIST: `$tag{artist}'\n" .   #
+            "      YEAR: `$tag{date}'\n" .     #
+            "     ALBUM: `$tag{album}'\n" .    #
+            "   SYMLINK: `$link'\n";           #
+    } elsif (!$Opt{quiet} and -t STDERR) {     #   normal output
+        print STDERR "\e[s ($count left) ".    #     (unless STDERR is
+            "`$link'\e[K\e[u";                 #     redirected)
+    }                                          #
+    make_rel_symlink $_, "$dest/$link";        #   create link
+    $count --;                                 #   update countdown
+}                                              #
+utime undef, undef, $dest;                     #   dest dir modification time
+
+
+__END__
