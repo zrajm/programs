@@ -1,0 +1,691 @@
+#!/bin/zsh
+#
+# [2005-04-24, 04:22-12:40] v1.0 - Written by Zrajm C Akfohg
+#
+# [2005-04-24, 13:45-21:11] v1.1 - at work, partly after closing time, partly
+# while idling and waiting for customers; added: input of command prefix
+# numbers, no longer redraws entire screen unless necessary, commands (g/G p),
+# selection of mutliple items, plus squashed one or two buggies
+#
+# [2005-04-25, 05:59-06:51] vX.X - it is true as they say -- you shouldn't try
+# to program in your sleep -- no matter how much you want to (and I wanted it
+# *soo* badly! fuck sleep! fuck human needs! gimme a 24/7 avatar instead of
+# this lousy body!)
+#
+# [2005-04-25, 11:18-17:12] v1.2 - partial screen update tweaked (and now
+# excellent, thank you!) -- added shift up/down to select and move up/down --
+# fixed weird bug in which the last screenful contained leftovers from
+# previously viewed screen instead of trailing empty lines (wow! there's a
+# difference between zsh's `x=($array)'/`x+=($STRING)' and
+# `x=("$array[@]")'/`x=+=("$STRING")' -- the former does not include any empty
+# elements from $array or $STRING in $x, while the latter does -- neat! and
+# deceptive!) -- selected items are now displayed in bold -- implemented basic
+# options parsing and --help option
+#
+# [2005-04-26, 05:38-14:04] v1.3 - changed name to `termmen' (from `selector')
+# to better resemble `ratmen' -- added ignoring of all ratmen options --
+# rewrote screen update (yet again) -- added options `--version', `--single',
+# `--delimiter', `--persist', `--histfile' and `--histsize' (and their
+# functionality) -- redraw on window resize -- aborts if STDERR is redirected
+#
+# [2005-04-29, 18:56-19:12] v1.3.1 - bugfix -- if current item was marked it
+# didn't show, now it does (disabled no-updating-at-all of the screen, so it
+# always does at least a partial update) -- 'p' and 'g' (which uses prefix as
+# argument) now clears the prefix when invoked
+#
+# [2005-11-29, 12:27-15:20] v1.3.2 - added `--item=FILE' feature (which
+# loads/saves the number of the currently selected item on startup/exit, added
+# reading of menu arguments from STDIN
+#
+# [2005-12-13, 12:38-13:19] v1.3.3 - cursor is now visible in search modes
+#
+# [2005-12-14, 10:19-10:47] v1.3.4 - added ^P and ^N (emacs style previous/next
+# line) and ^U (erase to beginning of line) and improved the code a bit
+#
+# [2006-03-24, 02:40-04:49] v1.3.5 - hunted down gorram bug (took hours!) and
+# wiped it -- turns out the order of the arguments for zsh's `echotc cm' has
+# changed between versions (to become more standard I presume) which lead to
+# totally garbled termmen output; now does a tests which order arguments are
+# returned in and uses the old (reversed order) only if necessary. this is
+# zsh's ChangeLog entry for the change in question:
+#
+#   2005-03-02  Clint Adams  <clint@zsh.org>
+#
+#      * 20909, 20911: Src/Modules/termcap.c: reverse row and col arguments to
+#      tgoto(), and set affcnt to 1 unconditionally when we echotc a capability
+#      with arguments (which we then assume to be the 'cm' capability, with
+#      arguments in the form <rows> <columns>.
+#
+# [2006-09-18, 00:39-00:43] v1.3.6 - bugfix: used to quit abrubtly if a FILE
+# specified with the `-i/--item=FILE' did not contain a proper number. Now a
+# warning is issued on STDERR, and first menu item is pre-selected instead. (A
+# malformed or zero byte file [e.g. caused by a "disc full" error] would
+# otherwise cause termmen to quit everytime when invoked with this option.)
+#
+# [2007-07-06, 02:17-02:55] v1.3.7 - bugfix: no longer requests the "vi"
+# (cursor off) and "ve" (cursor on) termcap sequences (they were never used in
+# the program anyway) -- thereby elliminating ugly/unwanted output on STDERR of
+# termmen; changed licencing from GPL2 to Creative Commons
+# Attribution-ShareAlike 2.5 Sweden
+
+VERSION=1.3.7
+VERSION_DATE="6 July 2007"
+
+# FIXME:
+#   o terminal problem -- cannot run in rxvt (except under screen)
+#   o repeatedly pressing ^S/^R should not go one down/up if pattern did not
+#     match
+#
+# TODO: (approx. order of priority)
+#   o cursor movement for the search input/input modes
+#   o status reporting in search mode (e.g. ` (no match)' at end of input line)
+#   o error messages at prompt when something goes wrong (prefix out of range
+#     etc. -- see FIXMEs in code)
+#   o 'h' ('?' same as ^R) help function (which shows inventory of bound keys)
+#   o = to show status a la less
+#   o regex support (zsh module)
+#   o command to unmark/mark all (or things matching an expression) (a la mutt?)
+#   o don't jump up/down when using arrow up/down in search mode -- keep the
+#     marked item the same until user press ^S or ^R (it's confusing when
+#     things move that way)
+#   o repeat commands PREFIX times (unless they take an argument)
+#   o clear PREFIX after command has executed
+#   o allow start with --item=0 (which would result in a menu with no currently
+#     selected item, a la ratmen)
+#   o configurable keybindings
+#
+
+
+
+###############################################################################
+##                                                                           ##
+##  Informational Functions                                                  ##
+##                                                                           ##
+###############################################################################
+
+
+# output version info and exit
+version() {
+    cat <<-END-OF-VERSION-TEXT
+$EXE (zsh script) $VERSION (written $VERSION_DATE)
+
+Written by Zrajm C Akfohg (2005-$VERSION_DATE[(w)-1]).
+Distributed under Creative Commons Attribution-ShareAlike 2.5 Sweden Licence.
+(http://creativecommons.org/licenses/by-sa/2.5/se/deed.en)
+	END-OF-VERSION-TEXT
+    exit
+}
+
+# output help and exit
+help() {
+    cat <<-END-OF-HELP-TEXT
+	Usage: $EXE [OPTION]... [--] {MENUITEM COMMAND}...
+	   or: $EXE [OPTION]... {-d#|--delimiter=#} [--] MENUITEM#COMMAND
+	   or: $EXE [OPTION]... {-f|--files} [--] FILE...
+	Display a menu in terminal and run user selected command(s).
+	  (! = not supported by \`ratmen', * = not yet implemented)
+
+	  -                           replace with STDIN (not scanned for OPTIONs)
+	                              (STDIN is appended to args if no \`-' given)
+	  -l, -c, -r,              *  set window text alignment (Xresource)
+	      --align=PLACE           (left, center, right)
+	  -H, --no-hilite          !  don't automatically highlight on search
+	  -b, --back=PREVMENU      *  command to run on \`back'
+	  -d, --delimiter=DELIM       pair up each MENUITEM and COMMAND
+	                              in one argument separated by DELIM
+	  -e, --execute=CMD        !* run CMD pass selected items as args
+	  -f, --files              !  MENUARGS is a list of files, show only
+	                              filename (not full path) in menu
+	  -h, --help                  display this help and exit
+	      --histfile=NAME      !  name of history file (default: ~/.${EXE}rc)
+	      --histsize=LINES     !  size of history to save (default: 100)
+	  -i, --item=POSITION|FILE    select item at POSITION on startup, or load
+	                              startup POSITION from FILE (and save on exit)
+	  -i, --item=FILE             load start position from FILE, save on exit
+	  -P, --persist            !  don't auto-exit on accepting selection
+	  -n, --number             !  number items in menu
+	  -1, --single             !  disable multiple selection
+	  -p, --print              *  print selected items on exit, don't execute
+	  -S, --shell=SHELL        *  SHELL in which to run commands
+	  -V, --version               output version information and exit
+
+	Displays a menu and either runs a command (-e) or prints (-p) the selected
+	items on STDOUT on user selection. Menu is displayed on STDERR, for easy
+	redirection of output. Exits with return code 1 on bad argument, or if
+	nothing was output on STDOUT, or 0 if anything was selected by user.
+
+	NOTE: Separate OPTIONs and menu args with \`--' to avoid wasting a lot of time
+	scanning the *entire* command line for options (esp. in the case of menus with
+	hundreds of items, e.g. when using \`-f').
+
+	${(C)EXE} accepts all OPTIONs which can be given to \`ratmen', but those not
+	documented above are silently ignored (for compatibility).
+END-OF-HELP-TEXT
+#	Following options are silently ignored (for \`ratmen' compatibility):
+#	--background=COLOR, -C/--class=NAME, --debug, -D/--display=NAME,
+#	--foreground=COLOR, -F/--font=NAME, --(no-)mouse, -o/--scroll-offset=ITEMS,
+#	-s/--style={snazzy|dreary}, -t/--title=NAME, --(no-)unfocus-exit (Support for
+#	-C/--class=NAME and --mouse/--no-mouse may be added at a later date.)
+#
+#	MENUARG(s) is either: (a) a list of MENUITEM/COMMAND pairs given as separate
+#	arguments (i.e. two args for each pair, total number of args is even), or (b)
+#	with \`--delimiter=DELIM', each MENUITEM/COMMAND pair is given as a single arg,
+#	and separated from each other by DELIM, or (c) with \`--files', each MENUARG is
+#	the name of a file, the filename without it's path will be used for MENUARG,
+#	and the full name as COMMAND.
+    exit
+}
+
+
+
+###############################################################################
+##                                                                           ##
+##  Functions                                                                ##
+##                                                                           ##
+###############################################################################
+
+
+# output error message on standard error
+# (exits if given shell exit status as 2nd arg)
+ERRORS=0
+error() {                                      #
+    [[ -n $1 && -z $QUIET ]] &&                # output error any message
+        echo "$EXE: $1" >&2                    #   unless in QUIET mode
+    [[ $2 -eq 1 && -z $QUIET ]] &&             #   more info on exit status 1
+        echo "Try \`$EXE --help' for more information." >&2 #'"
+    [[ -n $2 ]] && exit $2                     # exit if given exit status
+    ((ERRORS++))                               # count errors
+}                                              #
+
+
+# save current item number to file and exit
+terminate() {                                  #
+    [[ -n $CURR_FILE ]] &&                     #
+        echo $CURR >!$CURR_FILE                #
+    exit $argv                                 #
+}                                              #
+
+
+screen_update_full() {
+        # create formatted buffer of screen contents
+        # (searches marked, but not selection & current item)
+        # ($text/$length is retained and used for partial updates)
+        text=(); length=()                     #
+        STAT_POS="$(tgoto $HEIGHT 0)"          # status line position
+
+        # create screen buffer
+        # (extract part of full menu; add line number & search hilite)
+        for (( i = TOP; i <= TOP+HEIGHT-1; i++ ));do # for each line on screen
+            local TEXT=$menu[i]                #       text
+            (( SHOW_LINE_NUMBER && i <= $#menu )) && # prepend line number
+                TEXT="${(l:NUMWIDTH:)i} $TEXT" #         (if --number)
+            TEXT=$TEXT[1,COLUMNS]              #       trunc to screen width
+            length+=($#TEXT)                   #       length (w/o escapes)
+            [[ -n $SHOW_FIND && -n $FIND ]] && #       find highlight
+                TEXT=${TEXT//$FIND/$BEG_FIND$FIND$END_FIND}
+            text+=("$TEXT")                    #
+        done                                   #
+
+        # modify for output
+        # NOTE: indices in $tmp is same as in $text
+        typeset -ga tmp                        #     init temporary array
+        tmp=("$text[@]")                       #     with entire screen buffer
+        for (( i = 1; i <= $#tmp; i++ )); do   #     for each relevant line
+            (( $+mark[$((i+TOP-1))] )) &&      #        add selection marking
+                tmp[i]=$BEG_MARK$tmp[i]$END_MARK #
+            tmp[i]+=$DEL_TO_EOL                #        add clear-to-eol
+        done                                   #
+        i=$((CURR-TOP+1))                      #     currently selected item
+        tmp[i]=${tmp[i]%$DEL_TO_EOL}           #       remove del-to-eol
+        tmp[i]=${tmp[i]}${(r:$((COLUMNS-length[i])):)} # pad to screen width
+        tmp[i]=${tmp[i]//$END_MARK/$END_MARK$BEG_CURR} # treat end of selected
+        tmp[i]=$BEG_CURR${tmp[i]}$END_CURR     #       and current start/end
+        tmp[1]="$HOME_POS$tmp[1]"              #     screen placement code
+    echo -E "${(F)tmp}" >&2                    #   output
+}                                              #
+
+
+screen_update_partial() {
+    # modify for output
+    # NOTE: indices in $tmp item numbers (NOT same as in $text)
+    typeset -gA tmp                            #     init temporary hash
+    tmp=(                                      #     with lines to be updated
+        $LAST_CURR $text[LAST_CURR-TOP+1]      #       from screen buffer
+        $CURR      $text[CURR-TOP+1]           #
+    )                                          #
+    for i ($LAST_CURR $CURR); do               #     for each relevant line
+        (( $+mark[$i] )) &&                    #        add selection marking
+            tmp[$i]=$BEG_MARK$tmp[$i]$END_MARK #
+        tmp[$i]+=$DEL_TO_EOL                   #        add clear-to-eol
+    done                                       #
+    i=$CURR                                    #     currently selected item
+    tmp[$i]=${tmp[$i]%$DEL_TO_EOL}             #       remove del-to-eol
+    tmp[$i]=${tmp[$i]}${(r:$((COLUMNS-length[i-TOP+1])):)} # pad to screen width
+    tmp[$i]=${tmp[$i]//$END_MARK/$END_MARK$BEG_CURR} # treat end of selected
+    tmp[$i]=$BEG_CURR${tmp[$i]}$END_CURR       #       and current start/end
+    for i ($LAST_CURR $CURR); do               #     screen placement code
+        tmp[$i]="$(tgoto $((i-TOP)) 0)$tmp[$i]"
+    done                                       #
+    echo -En "${(j::)tmp}$STAT_POS" >&2        #   output
+}                                              #
+
+# accept selection (i.e. output it on stdout)
+accept() {                                     # [2005-04-26]
+    HAS_OUTPUTTED=1                            #
+    if (( $#mark )); then                      #   if anything was marked
+        local I                                #     output that
+        foreach I (${(k)mark}); do             #
+            echo $file[I]                      #
+        done                                   #
+        mark=()                                #
+        (( EXIT_ON_ACCEPT )) && terminate      #     exit TRUE
+        screen_update_full                     #     or update screen
+    else                                       #   nothing marked
+        echo $file[$CURR]                      #     output current item
+        (( EXIT_ON_ACCEPT )) && terminate      #     exit FALSE
+    fi                                         #
+}                                              #
+
+
+###############################################################################
+##                                                                           ##
+##  Initialization                                                           ##
+##                                                                           ##
+###############################################################################
+
+
+emulate -RL zsh                                # reset zsh options
+setopt EXTENDED_GLOB NULL_GLOB                 #   extended globs, never error
+EXE="${0##(${(j:|:)~path})/}"                  # remove path from $0
+
+stdin=()                                       # read from standard input
+[[ ! -t 0 ]] && stdin=(${(f)"$(<&0)"})         #   (if any)
+
+# parse command line arguments
+CURR=1                                         # for --item=POSITION
+DELIMITER=''                                   # for --delimiter
+FILE_MENU=''                                   # for --files
+HIST_FILE=~/.${EXE}rc                          # for --history-file
+HIST_SIZE=100                                  # for --history-size
+MARK_SINGLE=''                                 # for --single
+SHOW_FIND_AUTOENABLE=1                         # for --no-hilite
+SHOW_LINE_NUMBER=''                            # for --number
+EXIT_ON_ACCEPT=1                               # for --multi
+for (( I = 1; I <= ARGC; )); do                # for each argument
+    [[ $argv[I] == (#b)(--[^=]#)=(*) ||        #   separate option from its
+       $argv[I] == (#b)(-[di])(?*) ]] &&       #     argument (-d, -i
+        argv[I]=($match[1] $match[2])          #       all take args)
+    [[ $argv[I] == (#b)(-[^-])(?*) ]] &&       #   separate bundled short
+        argv[I]=($match[1] -$match[2])         #     options from each other
+    case $argv[I] in                           #
+        (--no-(hilite|highlight))
+                           SHOW_FIND_AUTOENABLE=''  ;;
+        (-d|--delimiter)   argv[I]=(); DELIMITER=$argv[I] ;;
+        (-f|--files)       FILE_MENU=1              ;;
+        (-h|--help)        help                     ;;
+        (--histfile)       argv[I]=(); HIST_FILE=$argv[I];;
+        (--histsize)       argv[I]=(); HIST_SIZE=$argv[I];;
+        (-i|--item)        argv[I]=(); CURR=$argv[I];;
+        (-n|--number)      SHOW_LINE_NUMBER=1       ;;
+        (-P|--persist)     EXIT_ON_ACCEPT=''        ;;
+        (-1|--single)      MARK_SINGLE=1            ;;
+        (-V|--version)     version                  ;;
+        # `ratmen' compatibility options (silently ignored):
+        (--(class|display|(fore|back)ground))       ;& # options w/ args
+        (--(font|scroll-offset|style|title))        ;&
+        (-[CDFost]) argv[I]=()                      ;;
+        (--(debug|(no-|)(mouse|unfocus-exit)))      ;; # argless options
+        (--)               argv[I]=(); break        ;;
+        (-)  argv[I]=($stdin); (( I += $#stdin ));     # add STDIN to args
+             stdin=(); continue                     ;;
+        (-*) error "Unknown option \`$argv[I]'" ;; #'"
+        (*) (( I++ )); continue ;;             #   ignore non-option arguments
+    esac                                       #
+    argv[I]=()                                 #   remove it from $argv
+done                                           #
+(( ERRORS > 0 )) && error '' 1                 # ERRORS: some option unknown
+
+[[ ! -t 2 ]] &&                                # ERROR: STDERR is redirected
+    error "cannot run unless STDERR is on terminal" 15
+
+# read --item from file (or use number)
+if [[ $CURR != [0-9]## ]]; then                # non-numerical --item
+    CURR_FILE=$CURR                            #   so it's arg is a file name
+    if [[ ! -f $CURR_FILE ]]; then             #   if no such file
+        CURR=1                                 #     select 1st item
+    else                                       #   otherwise
+        CURR="$(<$CURR_FILE)"                  #     load item no from file
+        if [[ $CURR != [0-9]## ]]; then        #     ERROR: no number in file
+            error "option -i/--item=FILE requires FILE to contain numeric argument" #'"
+            CURR=1                             #       WARN and make 1st item
+        fi                                     #          pre-selected
+    fi                                         #
+fi                                             #
+
+
+# add anything remaining from standard input to args
+[[ $#stdin -gt 0 ]] && argv+=($stdin)
+
+
+# create menu
+typeset -a file menu                           # create menu text
+if [[ -n $FILE_MENU ]]; then                   # menu using --file-menu
+    file=("${(@)argv}")                        #   to output on stdout
+    menu=("${(@)file:t}")                      #   to display on screen
+elif [[ -n $DELIMITER ]]; then                 # menu using --delimiter
+    for arg ("${(@)argv}"); do                 #   foreach menu argument
+        menu+=("${arg%%$DELIMITER*}")          #     string to display in menu
+        file+=("${arg#*$DELIMITER}")           #     string to outpt on stdout
+    done                                       #
+else                                           # default menu type
+    (( ARGC % 2 )) &&                          #   ERROR: bad number of args
+        error "not an even number of menu arguments" 1
+    for (( i = 1; i <= ARGC; )); do            #   foreach pair of menu args
+        menu+=($argv[i++])                     #     string to display in menu
+        file+=($argv[i++])                     #     string to output on stdout
+    done                                       #
+fi                                             #
+NUMWIDTH=${#${#file}}                          # width of last menu line number
+
+# some keys (should be taken from the termcap?)
+ARROW_UP=$'\e[A'
+ARROW_DN=$'\e[B'
+SHIFT_ARROW_UP=$'\e[a'
+SHIFT_ARROW_DN=$'\e[b'
+PAGE_UP=$'\e[5~'
+PAGE_DN=$'\e[6~'
+HOME_KEY=$'\e[1~'
+END_KEY=$'\e[4~'
+
+# and some terminal control codes
+CLS="$(echotc cl)"
+DEL_TO_EOL="$(echotc ce)"                      # clear to end-of-line
+HOME_POS="$(echotc ho)"                        # home position
+BEG_CURR="$(echotc mr)"                        # start of current item
+END_CURR="$(echotc me)"                        # end of current item
+BEG_MARK="$(echotc md)"                        # start of each selected item
+END_MARK="$(echotc me)"                        # end of each selected item
+BEG_FIND="$(echotc AB 3; echotc AF 0)"         # start of found highlight
+END_FIND="$(echotc AF 9; echotc AB 9)"         # end of found highlight
+#CURS_OFF="$(echotc vi)"                        #
+#CURS_ON="$(echotc ve)"                         #
+
+
+# place cursor on screen (workaround for earlier zsh
+# versions, which had `echotc cm' args in opposite order)
+[[ "$(echotc cm 1 2)" != *[^[:digit:]]2[^[:digit:]]##3[^[:digit:]]* ]] &&
+    TGOTO_REVERSE=1 || TGOTO_REVERSE=0         #
+tgoto() {                                      # [2006-03-24]
+    if (( TGOTO_REVERSE )); then               #
+        echotc cm ${(Oa)argv}                  #
+    else                                       #
+        echotc cm $argv                        #
+    fi                                         #
+}                                              #
+
+
+# trap triggered on exit or termination (ctr-l)
+TRAPEXIT TRAPINT() {                           #
+    echo ${(F)hist[1,HIST_SIZE]} \
+        >$HIST_FILE 2>&/dev/null               # save history
+    stty --file=$TTY $TTY_SETTINGS             # restore TTY settings
+#    echo -n $CURS_ON >&2                       # show cursor again
+    echotc te >&2                              # moving of cursor is done
+    if [[ $0 == TRAPEXIT ]]; then              # normal exit
+        echotc cl >&2                          #   clear screen
+        exit $((!HAS_OUTPUTTED))               #   return TRUE if anything has
+    fi                                         #     been outputted
+    exit $(( 128 + argv[1] ))                  # INT or similar, give
+}                                              #   appropriate return value
+
+# configure TTY
+TTY_SETTINGS="$(stty --file=$TTY --save)"      # store TTY settings
+stty --file=$TTY -ixon                         # allow ^S/^Q
+echotc ti >&2                                  # tell terminal that we move cursor
+#echo -n $CURS_OFF >&2                          #
+
+# initialize search history
+local -a hist                                  #
+[[ -r $HIST_FILE ]] &&                         # if save history exists
+    hist=(${(f)"$(<$HIST_FILE)"})              #   read it
+
+
+
+###############################################################################
+##                                                                           ##
+##  Main Program                                                             ##
+##                                                                           ##
+###############################################################################
+
+FIND=''                                        # find buffer
+HAS_OUTPUTTED=''                               # anything outputted on STDOUT?
+LAST_COLUMNS=$COLUMNS                          #
+LAST_LINES=$LINES                              #
+LAST_TOP=0                                     #
+MINIBUFFER_HEIGHT=1                            # height of 'minibuffer'
+MODE=':'                                       # start in colon (command) mode
+PREFIX=''                                      # command prefix
+SHOW_FIND=''                                   # don't highlight found strings
+TOP=1                                          # item at top of screen
+typeset -A mark                                # hash with marked item numbers
+mark=()                                        # numbers of marked files
+while ((1)); do                                #
+
+    # make sure current line isn't outside menu
+    if (( CURR <= 0 )); then                   # mark before start
+        ((CURR = X + (-X/$#file+1) * $#file))  #   goto end of list
+    elif (( $CURR > $#file )); then            # mark after end
+        ((CURR = (CURR-1) % $#file +1))        #   goto start of list
+    fi                                         #
+
+    HEIGHT=$((LINES-MINIBUFFER_HEIGHT))        # lines for menu on screen
+    TOP=$(( ((CURR-1)/HEIGHT) * HEIGHT +1 ))   # calc number of top row
+    # update screen contents
+    #   (NOTE: screen is ALWAYS updated -- even when not really necessary [e.g.
+    #   user pressed an invalid command which resulted in no screen change] --
+    #   however most updates are PARTIAL, i.e. affects only lines $CURR and
+    #   $LAST_CURR [current line, and the previously current line] so it
+    #   shouldn't be to expensive/ugly).
+    DEBUG=''
+    if [[ $COLUMNS != $LAST_COLUMNS ||         #
+          $LINES   != $LAST_LINES ]]; then     #
+        screen_update_full                     #
+        DEBUG=resized                          #
+    elif [[ $TOP       == $LAST_TOP       &&   #   top of screen hasn't moved &
+            $SHOW_FIND == $LAST_SHOW_FIND &&   #     hilite not been on/off:ed
+          ( $FIND      == $LAST_FIND      ||   #     and find word is the same
+            $SHOW_FIND == '' ) ]]; then        #     or hilite is off
+            screen_update_partial              #       then update menu display
+    else                                       #   full update
+        screen_update_full                     #
+    fi                                         #
+    # update status line
+    echo -En "$MODE${${${MODE/:}:+$FIND}:-$PREFIX}$DEL_TO_EOL" >&2
+    # debug output
+    #CURS_SAVE="$(echotc sc)"
+    #CURS_LOAD="$(echotc rc)"
+    #echo -n "$CURS_SAVE$HOME_POS($LINES/$COLUMNS;$CURR;$TOP)$CURS_LOAD" >&2
+
+    # show gotten any but unmapped key
+    if [[ -n $RESIDUAL_KEY ]]; then
+        OUT=" (Unknown key: \`${(V)RESIDUAL_KEY}')" #'"
+        echo -En $OUT >&2
+        RESIDUAL_KEY=''
+    fi
+    LAST_TOP=$TOP                              #   remember current values for
+    LAST_CURR=$CURR                            #     comparison at next screen
+    LAST_FIND=$FIND                            #     update
+    LAST_SHOW_FIND=$SHOW_FIND                  #
+    LAST_COLUMNS=$COLUMNS                      #
+    LAST_LINES=$LINES                          #
+
+    # read keypress
+    KEY=''                                     #
+    read -sk KEY                               #
+    if [[ $KEY == $'\e' ]]; then               #
+        while read -skt KEY2; do               #
+            KEY+=$KEY2                         #
+        done                                   #
+        # FIXME: sometimes $KEY is set to more
+        # than one keypress (e.g.  because of
+        # extensive autorepeat) -- in this split
+        # it (drop keypresses? or buffer them?)
+    fi                                         #
+
+    # in search mode
+    if [[ $MODE == [/?] ]]; then               # in search mode ('?' or '/')
+        case $KEY; in                          #
+            ($'\e'|$'\007')                    #   ^G or Escape
+                CURR=$OLD_CURR                 #
+                MODE=':'                    ;; #
+            ($'\n')   MODE=':'              ;; #   Enter
+            ($'\014') screen_update_full    ;; #   ^L - redraw screen
+            ($'\023')                          #   ^S or '/' - next match
+                [[ -z $FIND ]] &&              #     if input is empty use
+                    FIND=$hist[(R)?*]          #       last non-empty from hist
+                ((CURR++))                     #
+                MODE='/'                    ;; #
+            ($'\022')                          #   ^R or '?' - previous match
+                [[ -z $FIND ]] &&              #     if input is empty use
+                    FIND=$hist[(R)?*]          #       last non-empty from hist
+                ((CURR--))                     #
+                MODE='?'                    ;; #
+            ($'\025') FIND=''               ;; #   ^U - erase to beg of line
+            ($ARROW_UP|$'\020')                #   ^P / arrow up
+                (( $HIST == $#hist )) &&       #
+                    hist[HIST]=$FIND           #     save current input in hist
+                (( --HIST < 1 )) &&            #
+                    HIST=1                     #
+                FIND=$hist[HIST]            ;; #
+            ($ARROW_DN|$'\016')                #   ^N / arrow down
+                (( $HIST == $#hist )) &&       #
+                    hist[HIST]=$FIND           #     save current input in hist
+                (( ++HIST >= $#hist )) &&      #
+                    HIST=$#hist                #
+                FIND=$hist[HIST]            ;; #
+            (' ')         FIND+=_           ;; #   Space
+            ($'\177'|$termcap[bc])             #   Backspace
+                [[ -n $FIND ]] &&              #     if there's input left
+                    FIND=$FIND[1,-2] ||        #     erase last char
+                    MODE=':'                ;; #     else goto colon mode
+            ([[:print:]]) FIND+=$KEY        ;; #   other key - add to input buffer
+            (*) RESIDUAL_KEY=$KEY           ;; #
+        esac                                   #
+        if [[ $MODE == ':' ]]; then            # just turned into colon mode
+            hist=(${hist:#$FIND})              #   remove identical from history
+            hist+=($FIND)                      #   add find buffer to history
+            KEY=''                             #   clear read key buffer
+#            echo -n $CURS_OFF >&2              #   turn cursor off
+        elif [[ $MODE == '/' ]]; then          # search forwards
+            [[ $FIND != $LAST_FIND ]] &&       #   new string to find -- then
+                CURR=$OLD_CURR                 #     search from invoking pos
+            AT=${${menu[CURR,-1]}[(i)*$FIND*]} #   find next match
+            AT=$((AT+CURR-1))                  #
+            (( AT > $#menu )) &&               #   was last -- wrap to beginning
+                AT=$menu[(i)*$FIND*]           #
+            (( AT <= $#menu )) && CURR=$AT     #   if found: mark found item
+        elif [[ $MODE == '?' ]]; then          # search backwards
+            [[ $FIND != $LAST_FIND ]] &&       #   new string to find -- then
+                CURR=$OLD_CURR                 #     search from invoking pos
+            AT=${${menu[1,CURR]}[(I)*$FIND*]}  #
+            (( AT == 0 )) &&                   #   was 1st -- wrap to end
+                AT=$menu[(I)*$FIND*]           #
+            (( AT >= 1 )) && CURR=$AT          #   if found: mark found item
+        fi                                     #
+    fi                                         #
+
+    # in colon (command) mode
+    if [[ $MODE == ':' ]]; then                # in 'colon' mode
+        case $KEY; in                          #
+            ($ARROW_UP|$'\020')                #   ^P / arrow up
+                ((CURR--))                  ;; #
+            ($ARROW_DN|$'\016')                #   ^N / arrow down
+                ((CURR++))                  ;; #
+            ($SHIFT_ARROW_UP)                  #   shift arrow up
+                (( $+mark[$CURR] )) &&         #     if already marked
+                    unset "mark[$CURR]" ||     #       unmark item
+                    mark+=($CURR '')           #       otherwise mark it
+                ((CURR--))                  ;; #     mark above item
+            ($SHIFT_ARROW_DN)                  #   arrow down
+                (( $+mark[$CURR] )) &&         #     if already marked
+                    unset "mark[$CURR]" ||     #       unmark item
+                    mark+=($CURR '')           #       otherwise mark it
+                ((CURR++))                  ;; #     mark below item
+            ($PAGE_UP)                         #   page up
+                CURR=$((CURR-HEIGHT))          #
+                (( CURR < 1 )) && CURR=1    ;; #
+            ($PAGE_DN)                         #   page down
+                CURR=$((CURR+HEIGHT))          #
+                (( CURR > $#menu )) &&         #
+                    CURR=$#menu             ;; #
+            ($HOME_KEY)                        #
+                CURR=1                      ;; #
+            ($END_KEY)                         #
+                CURR=$#menu                 ;; #
+            ($'\t'|$'\eu')                     #   Tab or M-u
+                [[ -z $SHOW_FIND ]] &&         #
+                    SHOW_FIND=1 ||             #
+                    SHOW_FIND=''            ;; #
+            (' ')                              #   Space
+                (( $+mark[$CURR] )) &&         #     if already marked
+                    unset "mark[$CURR]" ||     #       unmark item
+                    mark+=($CURR '')        ;; #       otherwise mark it
+            ($'\014'|r|R) screen_update_full;; #   ^L/'r'/'R' - redraw screen
+            ('/'|$'\023') MODE='/'          ;; #   ^S or '/' - search forward
+            ('?'|$'\022') MODE='?'          ;; #   ^R or '?' - search backward
+            (g|'<')                            #   'g' or '<' - goto line
+                (( ${PREFIX:-1} <= $#menu )) && #    (default: 1st line)
+                    CURR=${PREFIX:-1}          #    FIXME: error msg when PREFIX too large
+                    PREFIX=''               ;; #
+            (G|'>')                            #   'G' or 'g' - goto line
+                (( ${PREFIX:-$#menu} <= $menu )) && # (default: last line)
+                    CURR=${PREFIX:-$#menu}     #    FIXME: error msg when PREFIX too large
+                    PREFIX=''               ;; #
+            (n)                                #   'n' -- find next match
+                if [[ -n $FIND ]]; then        #
+                    OLD_CURR=$CURR             #
+                    ((CURR++))                 #
+                    AT=${${menu[CURR,-1]}[(i)*$FIND*]} #  find next match
+                    AT=$((AT+CURR-1))          #
+                    (( AT > $#menu )) &&       #     was last -- wrap to beginning
+                        AT=$menu[(i)*$FIND*]   #
+                    (( AT <= $#menu )) &&      #     if found
+                        CURR=$AT ||CURR=$OLD_CURR #    mark found item
+                fi ;;                          #     FIXME: error msg when FIND missing
+            (N)                                #   'N' -- find previous match
+                if [[ -n $FIND ]]; then        #
+                    OLD_CURR=$CURR             #
+                    ((CURR--))                 #
+                    AT=${${menu[1,CURR]}[(I)*$FIND*]}
+                    (( AT == 0 )) &&           #   was 1st -- wrap to end
+                        AT=$menu[(I)*$FIND*]   #
+                    (( AT >= 1 )) &&           #   if found
+                        CURR=$AT||CURR=$OLD_CURR #     mark found item
+                fi ;;                          #     FIXME: error msg when FIND missing
+            (p|%)                              #   'p' or '%' - goto percent
+                (( ${PREFIX:-0} <= 100 )) &&   #
+                    CURR=$(( ${PREFIX:-0} * ($#menu-1) / 100 +1 ))
+                    PREFIX=''               ;; #
+            (q|$'\e') terminate             ;; #   'q' / Escape -- cancel mark & exit
+            ($'\n')   accept                ;; #   Enter -- accept mark
+            (x)       accept                   #   'x' -- accept mark & exit
+                      terminate             ;; #
+            ($'\177'|$termcap[bc])             #   Backspace
+                PREFIX=$PREFIX[1,-2]        ;; #     erase last char
+            ([0-9]) PREFIX+=$KEY            ;; #
+            (*)     RESIDUAL_KEY=$KEY       ;; #
+        esac                                   #
+        if [[ $MODE == [/?] ]]; then           #   went into search mode
+            OLD_CURR=$CURR                     #     remember this line number
+            OLD_FIND=$FIND                     #     remember last found thingy
+            FIND=''                            #     clear find buffer
+            hist+=('')                         #     add empty history entry
+            HIST=$#hist                        #     change that history number
+            [[ -n $SHOW_FIND_AUTOENABLE ]] &&  #     turn on highlighting of
+                SHOW_FIND=1                    #       found words
+#            echo -n $CURS_ON >&2               #     turn cursor on
+        fi                                     #
+        (( MARK_SINGLE && $#mark > 0 )) &&     #   single-mark-mode and an item
+            accept                             #     is selected? -- accept mark
+    fi                                         #
+done                                           #
