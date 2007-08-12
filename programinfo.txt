@@ -1,0 +1,27 @@
+mplayer-lastfm
+
+    Är en wrapperskript för till "mplayer", skrivet i Perl. Wrapperskriptet
+    parsar mplayers output i terminalfönstret, för att ta reda på vilka filer
+    som spelas upp -- dessa filer undersöks av wrapperskriptet och eventuella
+    taggar scrobblas till last.fm, och tillförs således användarens statistik
+    över musik som han/hon spelat där.
+
+
+ogglink
+
+    Ett kommandoradsverktyg skrivet i Perl, till för att strukturera upp en
+    brokig musiksamling. Skapar symlänkar till kataloger med musik, där namnet
+    på länken baseras på taggar i de som finns musikfilerna ifråga.
+
+
+termmen
+
+    Ett kommandoradsverktyg skrivet i zsh, avsett att användas i skriptar och
+    dylikt. Programmet presenterar en meny i terminalen (på standard error),
+    där användaren kan välja ett eller flera alternativ, som sedan outputtas
+    på standard output. Lämpligt att använda i satser såsom ett shellskript
+    t.ex. på följande sätt:
+
+        REPLY="$(termmen Ja y Nej n)"
+        # $REPLY nu "y" om användare svarade "Ja".
+
