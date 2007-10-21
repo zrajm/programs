@@ -1,0 +1,27 @@
+# This is just an example config file. It should be named either
+# "~/.mplayer-lastfmrc" or "~/.mplayer/mplayer-lastfm.conf" (if both files
+# exists, only the previous one will be read). The below five values are the
+# only ones you can change.
+#
+# Strings may be quoted with single or double quotes. Comments are allowed on
+# separate lines, or at end of lines. There's no tilde expansion, and since the
+# programs pwd at runtime is the directory it was started from, file names
+# should be specified with full path.
+#
+# NB: There are no default values, so you really must set the status and cache
+# file option, or you'll most likely end up with an install of mplayer-lastfm
+# that doen't work.
+#
+
+user        = USERNAME  # your last.fm username
+pass        = PASSWORD  # your last.fm password (in clear text, sorry)
+
+            # NOTE! You might wanna "chmod 600" this file, to avoid having
+            # others snooping up your last.fm password. (This chmodding will be
+            # enforced in future versions of mplayer-lastfm.)
+
+status_file = '/home/USERNAME/.mplayer/mplayer-lastfm.status'
+cache_file  = '/home/USERNAME/.mplayer/mplayer-lastfm.cache'
+debug_file  = '/home/USERNAME/.mplayer/mplayer-lastfm.log'
+
+#[[eof]]
