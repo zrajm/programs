@@ -1,0 +1,262 @@
+#!/usr/bin/perl -w
+
+=head1 NAME
+
+binratd - efficient `binary' rat movement for the keyboard
+
+
+=head1 SYNOPSIS
+
+Put the following in your `~/.Xsession' or `~/.xinitrc'.
+
+  ./binratd &
+
+
+=head1 DESCRIPTION
+
+That's `binary' as in `binary search' not as in `uses only zeroes and ones'.
+
+This program attempts a novel (at least I haven't previously seen anything like
+it) appoach to moving the rat pointer using the keyboard. It was developed
+for use with the ratpoison window manager, but should work fine in any X
+environment where you are able to bind a particular key to execute a command.
+
+When invoked (with e.g. `C-y' in ratpoison) the pointer of the rat is moved to
+the middle of the screen. You then press one of four keys (on the home row
+preferably, see EXAMPLES below) to move into any one of the four `quadrants' of
+the screen.
+
+The rat is centered in the choosen quadrant which becomes the new target. It is
+split into four subquandrants, and your next keypress will choose between which
+of these subquandrants to go to.
+
+The process is then repeated as many times as necessary, until you're satisfied
+with the rat's position and decide to click a rat key, cancel the whole thing
+or start over from the middle of the screen.
+
+It typically takes 5-8 keypresses (including invocation and clicking) to hit
+any spot on the screen. If you need really high precision, it will take more
+ but you can hit any spot, down to a specific pixel.
+
+
+=head1 OPTIONS
+
+None as of yet.
+
+
+=head1 EXAMPLES
+
+On a Dvorak keyboard, add the following keybindings to your `.ratpoisonrc':
+
+   newkmap rat
+   bind C-y            exec echo 'center'     >~/.binratd
+   definekey rat e     exec echo 'north west' >~/.binratd
+   definekey rat u     exec echo 'north east' >~/.binratd
+   definekey rat h     exec echo 'south west' >~/.binratd
+   definekey rat t     exec echo 'south east' >~/.binratd
+   definekey rat i     exec echo 'left'       >~/.binratd
+   definekey rat d     exec echo 'right'      >~/.binratd
+   definekey rat x     exec echo 'middle'     >~/.binratd
+   definekey rat space exec echo 'cancel'     >~/.binratd
+
+If you still use Qwerty, you would benefit from using the following instead
+(included it here only for completeness, since no Qwerty user would stoop so
+low as to I<optimize the basic input task>). ;)
+
+   newkmap rat
+   bind C-y            exec echo 'center'     >~/.binratd
+   definekey rat d     exec echo 'north west' >~/.binratd
+   definekey rat f     exec echo 'north east' >~/.binratd
+   definekey rat j     exec echo 'south west' >~/.binratd
+   definekey rat k     exec echo 'south east' >~/.binratd
+   definekey rat h     exec echo 'left'       >~/.binratd
+   definekey rat g     exec echo 'right'      >~/.binratd
+   definekey rat b     exec echo 'middle'     >~/.binratd
+   definekey rat space exec echo 'cancel'     >~/.binratd
+
+The above will allow you to move the rat pointer without moving any fingers
+from the home row. Fingers only have to move to click a rat button. The use of
+`C-y' to invoke the rat-moving is simply because it happens to be a convenient,
+and unbound key on my keyboard. Choose something that works for you.
+
+
+=head1 FILES
+
+C<binratd> communicates with the user over a named pipe. Write any sequence of
+(to C<binratd>) known commands:
+
+
+
+
+=head1 DEPENDENCIES
+
+This program uses the X11::GUITest Perl module (available from CPAN). All other
+dependencies should be included in your Perl installation.
+
+
+=head1 BUGS
+
+=over 2
+
+=item o
+
+What happens if user run C<binratd> in two separate X sessions at the same
+time?
+
+=item o
+
+Don't try to run two instances of the daemon (untested). -- Should add a PID
+file (`~/.$fifo.pid', maybe?) to check if daemon is already running when
+starting new one, in order to fix this.
+
+=item o
+
+Nothing is done to make sure that we move the rat on the correct screen. This
+will not work well on a dual head machine. :(
+
+=back
+
+
+=head1 SEE ALSO
+
+ratpoison
+
+
+=head1 AUTHOR
+
+Zrajm C Akfohg <binratd-mail@klingonska.org> (2008), program is distributed
+under the Creative Commons License: Attribute-Share Alike (3.0).
+
+
+=head1 HISTORY
+
+[2008-01-20, 00:48-02:55] v0.1 - Initial test of the idea (using readline,
+and no ratpoison bindings)
+
+[2008-01-20, 04:33-07:01] v0.2 - Switched from reading keyboard directly to
+using a fifo (now usable from keyboard bindings in "~/.ratpoisonrc")
+
+[2008-01-20, 14:05-14:40] v0.3 - Found the following on
+[http://www.unix.org.ua/orelly/perl/cookbook/ch16_12.htm]:
+
+    Only two exceptional conditions can happen when using named pipes: a
+    writer can have its reader disappear, or vice versa. If a process is
+    reading from a named pipe and the writer closes its end, the reading
+    process will get an end of file (<> returns undef). If the reader closes
+    the connection, though, the writer will get a SIGPIPE when it next tries
+    to write there. If you disregard broken pipe signals with $SIG{PIPE} =
+    'IGNORE', your print will return a false value and $! will be set to
+    EPIPE
+
+Adding ignoring of $SIG{PIPE} and "binratd" now more starts chewing up 70%
+CPU (or more). Wonderous! :)
+
+[2008-01-21, 01:34-03:00] v0.3 - Added a lot of comments, wrote pod. Named the
+program `binratd'.
+
+
+=head1 TODO
+
+=over 2
+
+=item o
+
+Screen markings while moving. The current quadrant/target area should be marked
+clearly by a box with maybe 5px wide borders (outer edge should indicate size
+of target area, but edges must be thick enough or colored to be visible on any
+background). A thinner crosshair should indicate the rat's position.
+
+As user moves, the quadrant should be moved to the new position.
+
+How to accomplish this? Making small, undecorated windows for each line?
+Snapshot the screen, then display/modify the snapshot? Some X extension?
+
+=item o
+
+Expand interface to do text inserts (since it's so easy, and I've always wanted
+it) -- E.g. making it possible to use a command like `echo "insert gaga"
+>~/.binratd' to insert the string `gaga' to X's input buffer. (Yay! Binding a
+key to inserting the current date/time wherever I may roam! Splendid!)
+
+=item o
+
+Drag-and-drop rat stuff (one key to press rat button, re-navigate, then one to
+release -- also useful for navigating menus).
+
+=item o
+
+Undo/return key. Expand the box by going back from the current quadrant, to the
+larger previous one.
+
+=item o
+
+ALTERNATE NAVIGATION: Don't center rat on activation, instead let user
+re-orient rat pointer based on current position. (Should make short moves
+faster -- but is it worth it?) -- Maybe particular key sequences become reflex,
+and we shouldn't mess with that?
+
+=back
+
+=cut
+
+# name of fifo
+(my $fifo = $0) =~ s{^(?:.*/)?}{$ENV{HOME}/.};
+if (not -p $fifo) {
+    unlink $fifo;
+    mkfifo($fifo, 0700) or die "$0: mkfifo $fifo failed: $!"
+}
+
+use strict;
+use Term::ReadKey;
+use POSIX qw(mkfifo);
+use X11::GUITest qw(:CONST ClickMouseButton GetScreenRes MoveMouseAbs);
+
+sub center_pointer {
+    my ($x1, $y1, $x2, $y2) = @_;
+    my ($mx, $my) = (int(($x2-$x1)/2+$x1), int(($y2-$y1)/2+$y1));
+    MoveMouseAbs($mx, $my);
+    return ($mx, $my);
+}
+
+$SIG{PIPE} = 'IGNORE';
+$SIG{INT} = sub {
+    unlink $fifo;
+    exit;
+};
+
+
+$| = 1;
+$_ = '';
+# FIXME: should be size of current frame
+# FIXME: get the number of the screen, and keep the cursor there
+my ($mx, $my, $oldmx, $oldmy) = (0, 0, 0, 0);
+my ($x1, $y1, $x2,    $y2   ) = (0, 0, GetScreenRes());
+
+while (1) {
+    open my $fh, '<', $fifo;
+    while (<$fh>) {
+        ($oldmx = $mx, $oldmy = $my);
+        foreach (split ' ', $_) {
+            print "$_\n";
+            /center/  and do {
+                ($x1, $y1, $x2, $y2) = (0, 0, GetScreenRes);
+                next;
+            };
+            /south/  and do { $y1 = $my; next };
+            /east/   and do { $x1 = $mx; next };
+            /north/  and do { $y2 = $my; next };
+            /west/   and do { $x2 = $mx; next };
+            /left/   and do { ClickMouseButton M_LEFT;   last; }; # left button
+            /right/  and do { ClickMouseButton M_RIGHT;  last; }; # right button
+            /middle/ and do { ClickMouseButton M_MIDDLE; last; }; # middle button
+            /cancel/ and do {                            last; }; # cancel
+            /exit/   and do { kill INT => $$;                  }; # exit
+        }
+        ($mx, $my) = center_pointer($x1, $y1, $x2, $y2);
+        $oldmx == $mx && $oldmy == $my and last;
+        print "($mx, $my) = center_pointer($x1, $y1, $x2, $y2)\n";
+        system qw/ratpoison -c/, 'readkey rat';
+    }
+}
+
+#[[eof]]
