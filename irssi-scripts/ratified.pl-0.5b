@@ -1,0 +1,152 @@
+#!/usr/bin/perl -w
+#
+# [2004-08-10, 22:15-00:46] written by Zrajm C Akfohg
+#
+# [2004-08-11, 03:08-03:41] implemented display of private messages (/query
+# windows)
+#
+# [2004-08-16, 23:41-01:01] added word_wrap()
+#
+# [2004-08-24, 23:29-23:46] doesn't try to display anything if not in X (i.e.
+# if running in text console or over ssh)
+#
+# [2006-09-22, 00:36-01:26] v0.4a - now uses "system" with list
+# argument to avoid shell interpolation (backticks didn't work as
+# expected); also translates incoming utf8 chars (if they're in the
+# latin-1 range) to latin-1 -- this is a cheap workaround since I
+# can't be bothered to configure ratpoison for utf8 (yet; its support
+# for utf8 is so far pretty weak, according to someone on #ratpoison)
+#
+# [2008-03-17, 22:35-22:40] v0.5a - removed conversion of utf8 to
+# latin1, since ratpoison now supports utf8 natively
+
+# FIXME
+#
+#   o does word_wrap() handle utf8 characters correctly? if not, fix
+#     that (this goes for both "xcuses.pl" and "ratified.pl")
+
+# TODO
+#
+#   o don't show anything if the irssi-window is in a visible ratpoison frame,
+#     and message comes from a currently visible window inside that irssi
+#
+# ADVANCED TODO
+#
+#   o automatically go online if anything is said in an "open" channel?
+#     (i.e. in a non-query and non-bitlbee window)
+#
+#   o block individual peoples /queries (or all) (use same type of filtering as
+#     people.pl -- i.e. not nicks, but masks -- which are more permanet and
+#     reliable)
+#
+#   o show everything on some channels (if present in %SHOW)
+#   o all but blocked on some (if list in %SHOW, where first element is '-')
+#   o and only approved on some (if list in %SHOW, where first element is '+')
+#
+#   o load/save config
+#
+#   o commands to add people/channels
+#
+#
+#  ratified_beep_timeout
+#  ratified_private_beep_command
+#  ratified_public_beep_command
+#  ratified_display_fmt
+#  ratified_display_command
+#
+
+our $COLUMNS = 91;      # ratpoison message bar with
+our $VERSION = "0.5b";
+our %IRSSI = (
+    authors     => "Zrajm C Akfohg",
+    contact     => "zrajm\@klingonska.org",
+    name        => "ratified",
+    description => "Display messages in ratpoison as they arrive.",
+    license     => "GPLv2",
+    url         => "http://www.irssi.org/scripts/",
+);
+use strict;
+use Irssi;
+
+# simple subs
+sub TRUE()   { 1  }                            # some constants [perlsyn(1)
+sub FALSE()  { "" }                            # "Constant Functions"]
+
+# show only these channels
+my %SHOW = (
+    'IRCNet#klingon' => TRUE,
+    'freenode#2040'  => TRUE,
+#    'freenode##linux' => 1,
+);
+
+
+#my $config = Irssi::get_irssi_dir . "/ratified.cfg";
+# sub load_config() {}
+# sub save_config() {} (look at people.pl & charsetwars.pl for inspiration)
+
+
+Irssi::signal_add_last 'message public', sub {
+    my ($server, $msg, $nick, $address, $channel) = @_;
+    #$server{chatnet}_$target{name} => nicklist
+    show_text("$nick: $msg ($channel)")
+        if exists $SHOW{$$server{chatnet}.$channel};
+};
+
+#my ($server, $msg, $nick, $address, $channel) = @_;
+Irssi::signal_add_last 'message private', sub {
+    my (undef, $msg, $nick) = @_;
+    show_text("$nick: $msg");
+};
+
+
+# word wrap text
+sub word_wrap($$;$) {                          # [2004-08-17]
+    my ($text, $width, $hyphen) = @_;          #   get args
+    $hyphen = defined $hyphen ?                #   hypen = one char or
+        substr($hyphen, 0, 1) : "\\";          #     default "\"
+    my @word = split /(?<=\s)(?=\S)/, $text;   #   split text into words
+    $text = "";                                #
+    my $len = 0;                               #   last line's length
+    foreach (@word) {                          #   for each word
+        my $wordlen = /\s$/ ?                  #     length of word to add
+            length()-1 : length;               #
+        if ($len + $wordlen <= $width) {       #     word fits
+            $text .= $_;                       #       add to end-of-line
+            $len  += length;                   #
+        } else {                               #     word doesn't fit
+            if ($wordlen <= $width) {          #       word shorter than width
+                $text  =~ s/\s$/\n/;           #         add it to next line
+                $text .= $_;                   #
+                $len   = length;               #
+            } else {                           #       word longer than width
+                while ($wordlen > $width) {    #         break it into parts
+                    $text .= substr($_, 0,     #           placed on separate
+                        $width - $len - 1,     #           lines
+                        '') . "\\\n";          #
+                    $wordlen = /\s$/ ?         #
+                        length()-1 : length;   #
+                    $len = 0;                  #
+                }                              #
+                $text .= $_;                   #
+                $len   = length;               #
+            }                                  #
+        }                                      #
+    }                                          #
+    $text  =~ s/\s$// if $len > $width;        #
+    return $text;                              #   return word wrapped text
+}                                              #
+
+
+# display text in ratpoison
+sub show_text($) {                             # [2004-08-11] -- [2006-09-22]
+    my ($out) = @_;                            #   get args
+    return '' unless defined $ENV{DISPLAY};    #   if not running in X; abort
+    $out = word_wrap($out, $COLUMNS);          #   word wrap text
+    system 'ratpoison', '-c', "echo $out";     #   call ratpoison "echo"
+    system qw/beep -f 300 -l 25 -d 25 -r 3/    #   make some noise
+        unless -f "$ENV{HOME}/.no_beep";       #
+}                                              #
+
+print CLIENTCRAP "%B>>%n $IRSSI{name} $VERSION (by $IRSSI{authors}) loaded";
+
+#[eof]
