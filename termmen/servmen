@@ -1,0 +1,57 @@
+#!/bin/zsh
+
+# servmen - let user choose from menu server to ssh to
+#
+# NOTE: This script requires "termmen" [http://zrajm.org].
+#
+# Presents a menu of you host entries from~/.ssh/config, and starts an ssh shell
+# to the selected one.
+#
+# Call it without arguments. Servmen calls itself internally using an argument.
+#
+# [2008-06-04, 23:20-23:55] v0.1 - rudimentary first version
+#
+# [2008-08-20, 22:37-23:10] v0.2 - rewrote so that the menu is displayed in a
+# new terminal immediately; now also uses zsh-internal functions to parse
+# `~/.ssh/config' (faster/more portable); now fall backs on normal screen, zsh,
+# bash or sh if "screenmen" does not exist on server; also fall backs to using
+# "xterm" if "urxvtc" is missing
+#
+# [2009-09-28, 00:17-01:04] v0.2.1 - BUGFIX: wrote dotfiles in the current dir
+# instead of in $HOME; changed ssh config parsing = major speedup; now also
+# sensetive to precence/absence of variable $DISPLAY in environment
+
+emulate -RL zsh
+setopt EXTENDED_GLOB
+
+################################################################################
+if [[ $ARGC == 0 && -n $DISPLAY ]]; then       # under X with no args
+    urxvtc -e $0 ga || xterm -e $0 ga          #   restart myself in terminal
+else                                           # args -- display menu
+    # list of hosts to choose from
+    local -aU host                             # unique host list
+    #< ~/.ssh/config | while read "X"; do       # for each line in ssh config
+    #    [[ $X[(w)1] != (#i)Host ]] && continue #   which is a "host" line
+    #    [[ $X       == *"*"*    ]] && continue #   without wildcards
+    #    host+=($X[(w)2])                       #   add 2nd word to host list
+    #done                                       #
+    host=(${(f)"$(<~/.ssh/config)"})           # get ssh config file content
+    host=(${(M)host:#(#i)host *})              # keep only "host" lines
+    host=(${host:#*\**})                       # discard those with wildcards
+    host=(${host##(#i)host[= ]#})              # strip "host" prefix
+    host=(${host%% *})                         # strip all but 1st word
+
+    # show server menu
+    PREFIX=~/.${0:t}_
+    REMOTE=$(termmen                \
+	--item=$PREFIX"selected"    \
+	--histfile=$PREFIX"history" \
+	--delimiter=:               \
+	${(on)host})
+    [[ -z $REMOTE ]] && exit                   # exit if user cancelled
+
+    # connect to that host
+    ssh -t $REMOTE 'screenmen; [ $? -le 10 ] || screen -DRR || zsh || bash || sh'
+fi
+
+#[eof]
