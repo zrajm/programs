@@ -1,0 +1,20 @@
+First create a directory for your git repository:
+
+    mkdir repo-name.git
+    cd repo-name.git
+
+Now initialize the repo ("--bare" causes repo to be initiated directly in the
+current directory, instead of in a ".git" subdir -- which is what you do on
+your own machine).
+
+    git --bare init --shared=group    # ("init-db" on older git versions)
+    chgrp -R tech *
+
+To use git over HTTP you also need (on earlier versions of git replace "mv"
+command below with "chmod a+x hooks/post-update" -- "mv" works from at least
+version 1.6.3.3):
+
+    git --bare update-server-info
+    mv hooks/post-update.sample hooks/post-update
+
+[eof]
