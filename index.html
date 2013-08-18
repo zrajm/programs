@@ -1,0 +1,244 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+<head>
+    <title>Zrajm's programs and Hacks.</title>
+<style type="text/css">
+    body {
+        background-color:   white;
+        color:              black;
+        margin-right:       5em;
+        margin-left:        5em;
+    }
+    h1,h2     { text-align: center;         }
+    a:link    { color: #444444;             }
+    a:visited { color: #777777;             }
+    a:hover   { background-color: #dddddd;  }
+</style>
+
+
+</head>
+<body>
+
+
+<h2>Zrajm&rsquo;s programs and hacks</h2>
+
+<p>These are some of my numerous small programs. As times go on by
+I&rsquo;ll probably add more of them to this page. I&rsquo;m a <i><a
+href="http://www.gentoo.org">Gentoo</a></i> user so some of the below
+programs come with <i>portage ebuilds</i>. Feedback of any kind would
+be most appreciated (write to <i><a
+href="mailto:zrajm@klingonska.org">zrajm@klingonska.org</a></i>).</p>
+
+<hr>
+
+<table cellpadding="10"><tr valign="top">
+
+    <td><a href="binratd/?M=D">binratd</a></td>
+
+    <td><i>binratd</i> is a small daemon, which allows the user to quickly and
+    exactly move the mouse pointer using the keyboard (or commands). It works
+    by splitting the screen into four equally-sized quadrants placing the
+    pointer in the middle. User chooses one of the quadrants, which moves the
+    mouse pointer there, and splits that into four subquadrants. The process is
+    repeated until mouse pointer is located where user wants it (typically 2-6
+    keypresses required to hit the exact right spot, depending on spot size and
+    placement; 12 keypresses gives you 1 pixel precision on a 1024x768 screen).
+    <b>Requires <i><a href="http://www.perl.org/">Perl</a></i> and CPAN module
+    <i><a
+    href="http://search.cpan.org/~ctrondlp/X11-GUITest-0.21/GUITest.pm">X11::GUITest</a></i>
+    to work.</b></td>
+
+
+</tr><tr valign="top">
+
+    <td><a href="Log-Parse/?M=D">Log::Parse</a></td>
+
+    <td><i>Log::Parse</i> is a Perl module for parsing logfiles. It can handle
+    multiple-line log entries, can resume reading where a previous instance
+    left off (esp. useful on files which continuously grow) and has a callback
+    function for transparent extraction of date/time (or other data) from the
+    header of each log entry. Reading of files is done in chunks for better
+    performance.
+
+    <br>     A regex is used to match the beginning of the log entries, and
+    all parenthesized subexpressions in the regex are passed on to the callback
+    function, which in turn may do any processing wanted. Callback result is
+    returned with each <code>read()</code> (in list context) together with the
+    read log entry, making your log-parsing loop exceedingly simple, no matter
+    how complex your log format may be. <b>Requires <i><a
+    href="http://www.perl.org/">Perl</a></i> to work.</b></td>
+
+
+</tr><tr valign="top">
+
+    <td><a href="irssi-scripts/?M=D">irssi-scripts</a></td>
+
+    <td>These are a few plugin scripts for <i><a
+    href="http://irssi.org">Irssi</a></i> that have written and use:
+    <i>debuggy.pl</i>&mdash;don&rsquo;t remember what this does;
+    <i>fifo_remote.pl</i>&mdash;a &ldquo;remote control&rdquo; which lets you
+    send Irssi commands through a named pipe; <i>ratified.pl</i>&mdash;for
+    <i><a href="http://www.nongnu.org/ratpoison/">Ratpoison</a></i> users,
+    displays specified incoming messages in the ratpoison status
+    bar;<i>xcuses.pl</i>&mdash;define any number of aliases for changing away
+    status, each with its own message, e.g. <code>/zz</code> for &ldquo;away
+    sleeping&rdquo; and <code>/work</code> for an &ldquo;away at work&rdquo;;
+    <i>zz</i>&mdash;shell command to change call the <code>/zz</code> command
+    in Irssi, symlink to <i>zz</i> to call any other command. <b>All scripts
+    requires <i><a href="http://irssi.org">Irssi</a></i> to work; <i>zz</i>
+    additionally requires the <i>fifo_remote.pl</i> and <i>xcuses.pl</i>
+    scripts here included.</b></td>
+
+</tr><tr valign="top">
+
+    <td><a href="mplayer-lastfm/?M=D">mplayer-lastfm</a></td>
+
+    <td><i>Mplayer-lastfm</i> is a wrapper script; it starts <i>mplayer</i>
+    (and passes along command line arguments) and then stays around and parses
+    <i>mplayer</i>&rsquo;s terminal output, to find out which files are being
+    played. Played files are examined for audio tags, and, if found, these are
+    scrobbled to <a href="http://last.fm/">last.fm</a> (account info is stored
+    in a small config file). <b>Requires <i><a
+    href="http://www.perl.org/">Perl</a></i>, <i><a
+    href="http://www.mplayerhq.hu/">mplayer</a></i> and <i><a
+    href="http://freshmeat.net/projects/taginfo">taginfo</a></i> to
+    work.</b></td>
+
+</tr><tr valign="top">
+
+    <td><a href="ogglink/?M=D">ogglink</a></td>
+
+    <td><i>Ogglink</i> is a command line tool. It creates
+    links to directories containing music&mdash;assuming that each directory
+    contains only one album&mdash;and names the resulting link according to any
+    tags found in the music files. That is, as long as your music files are
+    decently tagged, and organised one album per directory, the links will be
+    systematically named, <i>regardless of the naming scheme of the music
+    files.</i>
+
+    <br>     I use this to create a homogenous list of music for my jukebox
+    system, while still retaining the original file names&mdash;useful, for
+    example, to be able to continue seeding a music torrent. <b>Requires <i><a
+    href="http://www.perl.org/">Perl</a></i> and <i><a
+    href="http://freshmeat.net/projects/taginfo">taginfo</a></i> to
+    work.</b></td>
+
+
+</tr><tr valign="top">
+
+    <td><a href="outwrap/?M=D">outwrap</a></td>
+
+    <td><i>Outwrap</i> is a simple output wrapper for cronjobs. It can redirect
+    the output of (any) specified command to one or more email addresses, and
+    it can be used to suppress output on successful execution (emailing the
+    complete output of the cronjob only if it fails with exit status other than
+    zero). It also always includes the exit code of the cronjob it its output.
+    <b>Requires a POSIX-compatible &ldquo;/bin/sh&rdquo; (e.g.  <i><a
+    href="http://gondor.apana.org.au/~herbert/dash/">dash</a></i>, but <a
+    href="https://wiki.ubuntu.com/DashAsBinSh/">please don't use bash as
+    &ldquo;/bin/sh&rdquo;</a>), and a an MTA which provides the
+    &ldquo;sendmail&rdquo; binary (e.g. <i><a
+    href="http://www.postfix.org/">postfix</a></i> or <i><a
+    href="http://www.exim.org/">exim</a></i>).</b></td>
+
+
+</tr><tr valign="top">
+
+    <td><a href="phoned/?M=D">phoned</a></td>
+
+    <td><i>Phoned</i> is a small daemon for logging time and caller ID
+    information of incoming phone calls. It requires a modem with caller ID
+    detection.&mdash;Logging is done using the system logger.
+
+    <br>     The program is written in Perl, and is primarily written to
+    fullfill my own needs. That means you&rsquo;ll probably have to re-write
+    something to get it to work for you, unless you (like me) live in Sweden,
+    and use ratpoison. Also included is a script for use with <i>metalog</i>,
+    which beeps and displays the calling number on screen when a call is
+    received. (Changes and ideas are welcome, also, maybe someday I&rsquo;ll re-write
+    this program C.)</td>
+
+
+</tr><tr valign="top">
+
+    <td><a href="ratmen/?M=D">ratmen</a></td>
+
+    <td><i>Ratmen</i> is a simple program for displaying a menu in a window. On
+    selection is may either run a program or simply write something on standard
+    out. It is inspired by, and is similar in function to, <i>9menu</i> and
+    <i>ratmenu</i> but is muchly improved. It includes: User settings in
+    X resources, long and short option names (using getopts), scrollable menus
+    (if they do not fit on screen), <i>both</i> mouse <i>and</i> keyboard
+    support, exiting on unfocus, and a decent manpage.</td>
+
+
+</tr><tr valign="top">
+
+    <td><a href="termmen/?M=D">termmen</a></td>
+
+    <td><i>Termmen</i> is written in <i><a
+    href="http://www.zsh.org/">zsh</a></i>, and aims to do what <i>Ratmen</i>
+    does, except entirely inside the terminal. The menu can&rsquo;t be navigated
+    using the mouse, but instead has several <i><a
+    href="http://www.greenwoodsoftware.com/less/">less</a></i>-inspired
+    keybindings for navigation. The menu is displayed on standard error, using
+    ANSI terminal escape codes, and user selections are outputted on stardard
+    out for a calling script to read. Easily invoked in scripts, e.g. using
+    <tt>REPLY="$(termmen Yes y No n)"</tt> (REPLY is then set to y/n depending
+    on whether user chose "Yes" or "No" on menu.)
+
+    <b>Requires <i><a href="http://www.zsh.org/">zsh</a></i> to work.</b></td>
+
+
+</tr><tr valign="top">
+
+    <td><a href="Term-ProgressMeter/?M=D">Term::ProgressMeter</a></td>
+
+    <td>A Perl module for outputting a progress meter on the terminal. It's
+    invoked at user-specified intervall, and you pass it references to a couple
+    of variables which it is then free to inspect. The progress meter is then
+    automatically updated at the given interval, with no additional trouble for
+    the programmer. Kinda neat. Beta. It is quite similar to the <i><a
+    href="http://search.cpan.org/dist/Term-ProgressBar/lib/Term/ProgressBar.pm"
+    >Term::ProgressBar</a></i> (by Martyn J. Pearce, available from <i><a
+    href="http://search.cpan.org/">CPAN</a></i>), except that I wanted to be
+    able to mix the progress bar with normal output freely (this is almost
+    totally transparent with <i>Term::ProgressMeter</i>. <b>Requires <i><a
+    href="http://www.perl.org/">Perl</a></i> to work.</b></td>
+
+
+</tr><tr valign="top">
+
+    <td><a href="zimplex/?M=D">Zimplex</a></td>
+
+    <td><i>Zimplex</i> my attempt at making Opera&rsquo;s UI bearable. A very
+    non-fancy skin, made with only simplicity of design, clarity of use, and
+    minimal screen usage in mind. It&rsquo;s based on <i><a
+    href="http://my.opera.com/community/customize/skins/info/?id=5306"
+    >Simple</a></i>, with tab colours from <i><a
+    href="http://my.opera.com/community/customize/skins/info/?id=3899"
+    >Cimple</a></i>. As soon as I get around to doing it, I&rsquo;ll redo the
+    reload button to be more of a classic one&mdash;maybe more like the one in
+    <i><a href="http://my.opera.com/community/customize/skins/info/?id=5730"
+    >Dimple</a></i>&mdash;the current one is an unintuitive yin-yangy-thingy.
+    The skin is sorta half-finished, but usable (not all icons have been
+    &ldquo;unrounded&rdquo;&mdash;some still retain the look from
+    <i>Simple</i>&mdash;I&rsquo;ll get back to that). <b>Requires <i><a
+    href="http://www.opera.com/">Opera</a></i> to work.</b></td>
+
+</tr></table>
+
+
+<div align="center">
+  <hr>
+  <small>Written 2003-2008 by
+    <i><a href="mailto:zrajm@klingonska.org">zrajm</a></i>.
+    <br>Valid <a href="http://validator.w3.org/check?uri=referer">XHTML 1.0</a>
+      and
+    <a href="http://jigsaw.w3.org/css-validator/check/referer">CSS</a>.
+  </small>
+</div>
+
+</body>
+</html>
